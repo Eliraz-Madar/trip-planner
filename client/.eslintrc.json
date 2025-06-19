@@ -1,0 +1,12 @@
+{
+  "extends": [
+    "react-app"
+  ],
+  "rules": {},
+  "overrides": [
+    {
+      "files": ["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"],
+      "rules": {}
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -14,6 +14,7 @@ import {
   Grid,
   Alert
 } from '@mui/material';
+import polyline from '@mapbox/polyline';
 
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -25,14 +26,12 @@ import L from 'leaflet';
 import icon from 'leaflet/dist/images/marker-icon.png';
 import iconShadow from 'leaflet/dist/images/marker-shadow.png';
 
-let DefaultIcon = L.icon({
+L.Marker.prototype.options.icon = L.icon({
   iconUrl: icon,
   shadowUrl: iconShadow,
   iconSize: [25, 41],
   iconAnchor: [12, 41]
 });
-
-L.Marker.prototype.options.icon = DefaultIcon;
 
 const PlanTrip = () => {
   const { user } = useAuth();
@@ -45,32 +44,111 @@ const PlanTrip = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const validateLocation = async (location) => {
+    try {
+      const response = await axios.get(`https://nominatim.openstreetmap.org/search`, {
+        params: { q: location, format: 'json', limit: 1 }
+      });
+      return response.data.length > 0 ? response.data[0] : null;
+    } catch (error) {
+      console.error('Error validating location:', error);
+      return null;
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    console.log('Trip planning started...');
+    console.log('Trip type:', tripType);
+    console.log('Start location:', startLocation);
+    console.log('End location:', endLocation);
 
     try {
-      // Here you would typically call your backend API to generate the route
+      // Validate locations
+      console.log('Validating start location...');
+      const startResult = await validateLocation(startLocation);
+      console.log('Start location validation result:', startResult);
+
+      console.log('Validating end location...');
+      const endResult = await validateLocation(endLocation);
+      console.log('End location validation result:', endResult);
+
+      if (!startResult || !endResult) {
+        const errorMsg = 'One or both locations could not be found.';
+        console.error(errorMsg);
+        setError(errorMsg);
+        setLoading(false);
+        return;
+      }
+
+      // Extract coordinates
+      const startCoords = [parseFloat(startResult.lon), parseFloat(startResult.lat)];
+      const endCoords = [parseFloat(endResult.lon), parseFloat(endResult.lat)];
+      console.log('Start coordinates [lon, lat]:', startCoords);
+      console.log('End coordinates [lon, lat]:', endCoords);
+
+      // Call OpenRouteService API
+      console.log('Calling OpenRouteService API...');
+      console.log('API URL:', `https://api.openrouteservice.org/v2/directions/${tripType}`);
+      console.log('Request payload:', {
+        coordinates: [startCoords, endCoords],
+        format: 'geojson'
+      });
+      console.log('API key:', process.env.REACT_APP_ORS_API_KEY);
       
-
-      // For now, we'll simulate a route with some sample coordinates
-      const sampleRoute = [
-        [51.505, -0.09],
-        [51.51, -0.1],
-        [51.52, -0.12]
-      ];
-
-      setRoute(sampleRoute);
-
-      // Get weather forecast for the start location
-      const weatherResponse = await axios.get(
-        `https://api.openweathermap.org/data/2.5/forecast?lat=${sampleRoute[0][0]}&lon=${sampleRoute[0][1]}&appid=${process.env.REACT_APP_WEATHER_API_KEY}&units=metric`
+      const response = await axios.post(
+        `https://api.openrouteservice.org/v2/directions/${tripType}`,
+        {
+          coordinates: [startCoords, endCoords],
+          format: 'geojson'
+        },
+        {
+          headers: {
+            'Authorization': process.env.REACT_APP_ORS_API_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
       );
 
+      console.log('OpenRouteService API response:', response.data);
+      console.log('Routes array:', response.data.routes);
+
+      if (!response.data.routes || response.data.routes.length === 0) {
+        console.error('No routes returned from the API');
+        setError('No route found between these locations. Please try different locations or a different transport mode.');
+        setLoading(false);
+        return;
+      }
+
+      console.log('Selected route:', response.data.routes[0]);
+      console.log('Route geometry:', response.data.routes[0].geometry);
+
+
+      const decodedGeometry = polyline.decode(response.data.routes[0].geometry);
+
+      // Convert to [lat, lon] format as expected by Leaflet
+      const routeCoordinates = decodedGeometry.map(coord => [coord[0], coord[1]]);
+
+      console.log('Extracted route coordinates (first and last):', 
+      routeCoordinates.length > 0 ? [routeCoordinates[0], routeCoordinates[routeCoordinates.length-1]] : 'None');
+
+      
+      setRoute(routeCoordinates);
+
+      // Get weather data for start location
+      console.log('Fetching weather data...');
+      const weatherResponse = await axios.get(
+        `https://api.openweathermap.org/data/2.5/forecast?lat=${startResult.lat}&lon=${startResult.lon}&appid=${process.env.REACT_APP_WEATHER_API_KEY}&units=metric`
+      );
+      console.log('Weather API response received');
       setWeather(weatherResponse.data);
+      console.log('Trip planning completed successfully');
     } catch (err) {
-      setError('Failed to plan trip');
+      //console.error('Error planning trip:', err);
+      //console.error('Error details:', err.response?.data || err.message);
+      setError('Failed to plan trip: ' + (err.response?.data?.error?.message || err.message));
     } finally {
       setLoading(false);
     }
@@ -81,36 +159,22 @@ const PlanTrip = () => {
       const tripData = {
         name: `${tripType} Trip from ${startLocation} to ${endLocation}`,
         type: tripType,
-        startLocation: {
-          coordinates: route[0],
-          city: startLocation,
-          country: 'Country' // You would get this from a geocoding service
-        },
-        endLocation: {
-          coordinates: route[route.length - 1],
-          city: endLocation,
-          country: 'Country'
-        },
-        route: {
-          coordinates: route
-        },
-        dailyDistances: [
-          { day: 1, distance: 10 },
-          { day: 2, distance: 15 }
-        ],
+        startLocation: { coordinates: route[0], city: startLocation, country: 'Country' },
+        endLocation: { coordinates: route[route.length - 1], city: endLocation, country: 'Country' },
+        route: { coordinates: route },
+        dailyDistances: [{ day: 1, distance: 10 }, { day: 2, distance: 15 }],
         totalDistance: 25,
         startDate: new Date(),
         endDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
       };
 
       await axios.post('http://localhost:5000/api/trips', tripData, {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`
-        }
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });
 
       navigate('/trips');
     } catch (err) {
+      console.error('Error saving trip:', err);
       setError('Failed to save trip');
     }
   };
@@ -128,13 +192,10 @@ const PlanTrip = () => {
               <form onSubmit={handleSubmit}>
                 <FormControl fullWidth margin="normal">
                   <InputLabel>Trip Type</InputLabel>
-                  <Select
-                    value={tripType}
-                    onChange={(e) => setTripType(e.target.value)}
-                    required
-                  >
-                    <MenuItem value="hiking">Hiking</MenuItem>
-                    <MenuItem value="bicycling">Bicycling</MenuItem>
+                  <Select value={tripType} onChange={(e) => setTripType(e.target.value)} required>
+                    <MenuItem value="foot-hiking">Hiking</MenuItem>
+                    <MenuItem value="cycling-regular">Bicycling</MenuItem>
+                    <MenuItem value="driving-car">Driving</MenuItem>
                   </Select>
                 </FormControl>
 
@@ -192,11 +253,7 @@ const PlanTrip = () => {
 
           <Grid item xs={12} md={8}>
             <Paper elevation={3} sx={{ p: 3, height: '500px' }}>
-              <MapContainer
-                center={[51.505, -0.09]}
-                zoom={13}
-                style={{ height: '100%', width: '100%' }}
-              >
+              <MapContainer center={[51.505, -0.09]} zoom={13} style={{ height: '100%', width: '100%' }}>
                 <TileLayer
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -209,12 +266,7 @@ const PlanTrip = () => {
                     <Marker position={route[route.length - 1]}>
                       <Popup>End Location</Popup>
                     </Marker>
-                    <Polyline
-                      positions={route}
-                      color="blue"
-                      weight={3}
-                      opacity={0.7}
-                    />
+                    <Polyline positions={route} color="blue" weight={3} opacity={0.7} />
                   </>
                 )}
               </MapContainer>
@@ -234,12 +286,8 @@ const PlanTrip = () => {
                     <Typography variant="subtitle1">
                       {new Date(forecast.dt * 1000).toLocaleDateString()}
                     </Typography>
-                    <Typography variant="h6">
-                      {Math.round(forecast.main.temp)}°C
-                    </Typography>
-                    <Typography variant="body2">
-                      {forecast.weather[0].description}
-                    </Typography>
+                    <Typography variant="h6">{Math.round(forecast.main.temp)}°C</Typography>
+                    <Typography variant="body2">{forecast.weather[0].description}</Typography>
                   </Paper>
                 </Grid>
               ))}
@@ -251,4 +299,4 @@ const PlanTrip = () => {
   );
 };
 
-export default PlanTrip; 
+export default PlanTrip;

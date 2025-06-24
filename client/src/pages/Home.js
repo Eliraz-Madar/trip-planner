@@ -93,7 +93,7 @@ const Home = () => {
             <CardMedia
               component="img"
               height="200"
-              image="https://source.unsplash.com/random/800x600/?weather"
+              image="https://source.unsplash.com/random/800x600?weather"
               alt="Weather"
             />
             <CardContent>

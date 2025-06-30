@@ -17,7 +17,7 @@ const tripSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['hiking', 'bicycling'],
+    enum: ['hiking', 'bicycling', 'driving', 'foot-hiking', 'cycling-regular', 'driving-car'], // Add the ORS types
     required: true
   },
   startLocation: {

@@ -28,16 +28,26 @@ router.get('/:id', auth, async (req, res) => {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    // Get weather forecast for the start location
-    const weatherResponse = await axios.get(
-      `https://api.openweathermap.org/data/2.5/forecast?lat=${trip.startLocation.coordinates[1]}&lon=${trip.startLocation.coordinates[0]}&appid=${process.env.WEATHER_API_KEY}&units=metric`
-    );
-
-    res.json({
-      trip,
-      weather: weatherResponse.data
-    });
+    try {
+      // Get weather forecast for the start location
+      const weatherResponse = await axios.get(
+        `https://api.openweathermap.org/data/2.5/forecast?lat=${trip.startLocation.coordinates[1]}&lon=${trip.startLocation.coordinates[0]}&appid=${process.env.OPENWEATHERMAP_API_KEY}&units=metric`
+      );
+      
+      res.json({
+        trip,
+        weather: weatherResponse.data
+      });
+    } catch (weatherError) {
+      console.error('Error fetching weather:', weatherError);
+      // Return the trip without weather data if weather API fails
+      res.json({
+        trip,
+        weather: null
+      });
+    }
   } catch (error) {
+    console.error('Error fetching trip:', error);
     res.status(500).json({ message: 'Error fetching trip' });
   }
 });
@@ -45,6 +55,7 @@ router.get('/:id', auth, async (req, res) => {
 // Create a new trip
 router.post('/', auth, async (req, res) => {
   try {
+    console.log('Received trip data:', req.body);
     const trip = new Trip({
       ...req.body,
       user: req.user._id
@@ -53,7 +64,8 @@ router.post('/', auth, async (req, res) => {
     await trip.save();
     res.status(201).json(trip);
   } catch (error) {
-    res.status(500).json({ message: 'Error creating trip' });
+    console.error('Error creating trip:', error);
+    res.status(500).json({ message: 'Error creating trip', error: error.message });
   }
 });
 
@@ -94,4 +106,4 @@ router.delete('/:id', auth, async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;

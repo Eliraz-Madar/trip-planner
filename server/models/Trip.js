@@ -84,7 +84,18 @@ const tripSchema = new mongoose.Schema({
   endDate: {
     type: Date,
     required: true
-  }
+  },
+  pointsOfInterest: [{
+    id: String,
+    name: String,
+    type: String,
+    location: {
+      type: [Number],
+      index: '2dsphere'
+    },
+    description: String,
+    isDestination: Boolean
+  }]
 }, {
   timestamps: true
 });
@@ -96,4 +107,4 @@ tripSchema.index({ route: '2dsphere' });
 
 const Trip = mongoose.model('Trip', tripSchema);
 
-module.exports = Trip; 
+module.exports = Trip;

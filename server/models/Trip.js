@@ -85,6 +85,14 @@ const tripSchema = new mongoose.Schema({
     type: Date,
     required: true
   },
+  image: {
+    type: String, // Store URL or path
+    default: null
+  },
+  imageUrl: {
+    type: String,
+    default: null
+  },
   pointsOfInterest: [{
     id: String,
     name: String,

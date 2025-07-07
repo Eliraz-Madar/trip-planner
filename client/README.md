@@ -3,6 +3,22 @@
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
 
+## Environment Variables
+
+Create a `.env` file in the client directory with the following variables:
+
+```
+REACT_APP_UNSPLASH_API_KEY=your_unsplash_api_key
+```
+
+### How to get an Unsplash API key:
+1. Visit https://unsplash.com/developers
+2. Create an account and a new application
+3. Copy the Access Key (not the Secret key)
+4. The app uses this API to fetch trip images based on trip type and location
+
+If you don't provide an Unsplash API key, the application will fall back to default trip images.
+
 ## Available Scripts
 Open a terminal and navigate to the server directory:
     Install dependencies (if you haven't already):

@@ -9,13 +9,25 @@ import {
   Grid,
   Box,
   Alert,
-  CircularProgress
+  CircularProgress,
+  Typography
 } from '@mui/material';
+
+// Helper function to format trip type for display
+const formatTripType = (type) => {
+  switch (type) {
+    case 'foot-hiking': return 'Hiking';
+    case 'cycling-regular': return 'Cycling';
+    case 'driving-car': return 'Driving';
+    default: return type;
+  }
+};
 
 const TripForm = ({ 
   formData, 
   handleChange, 
   handleSubmit, 
+  imageUrl,
   error, 
   loading, 
   route,
@@ -43,9 +55,9 @@ const TripForm = ({
           onChange={handleChange} 
           required
         >
-          <MenuItem value="foot-hiking">Hiking</MenuItem>
-          <MenuItem value="cycling-regular">Bicycling</MenuItem>
-          <MenuItem value="driving-car">Driving</MenuItem>
+          <MenuItem value="foot-hiking">{formatTripType('foot-hiking')}</MenuItem>
+          <MenuItem value="cycling-regular">{formatTripType('cycling-regular')}</MenuItem>
+          <MenuItem value="driving-car">{formatTripType('driving-car')}</MenuItem>
         </Select>
       </FormControl>
 
@@ -172,6 +184,44 @@ const TripForm = ({
         disabled={tripType === 'foot-hiking' && isCircular}
         helperText={tripType === 'foot-hiking' && isCircular ? 'End location same as start for circular routes' : ''}
       />
+
+      {/* Display the auto-generated trip image when available */}
+      {imageUrl && (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            {tripType === 'foot-hiking' && isCircular
+              ? `${formatTripType(tripType)} preview for ${startLocation}`
+              : `${formatTripType(tripType)} preview for ${startLocation} to ${endLocation || 'destination'}`}
+          </Typography>
+          <Box sx={{ mt: 1, position: 'relative' }}>
+            <img 
+              src={imageUrl} 
+              alt={`${formatTripType(tripType)} trip to ${endLocation || startLocation}`} 
+              style={{ 
+                width: '100%', 
+                height: '180px', 
+                objectFit: 'cover', 
+                borderRadius: '4px' 
+              }} 
+            />
+            <Typography 
+              variant="caption" 
+              sx={{ 
+                position: 'absolute', 
+                bottom: 4, 
+                right: 4, 
+                bgcolor: 'rgba(0,0,0,0.5)', 
+                color: 'white',
+                px: 1,
+                py: 0.5,
+                borderRadius: 1
+              }}
+            >
+              Image via Unsplash
+            </Typography>
+          </Box>
+        </Box>
+      )}
 
       {/* Move the buttons to the bottom of the form */}
       <Box sx={{ mt: 'auto', pt: 2 }}>

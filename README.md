@@ -77,7 +77,17 @@ WEATHER_API_KEY=your_openweathermap_api_key
 PORT=5000
 ```
 
-5. Start the development servers:
+5. Create a `.env` file in the client directory with the following variables:
+```
+REACT_APP_UNSPLASH_API_KEY=your_unsplash_api_key
+```
+To get an Unsplash API key:
+- Visit https://unsplash.com/developers
+- Create an account and a new application
+- Copy the Access Key (not the Secret key)
+- The app uses this to fetch trip images based on trip type and location
+
+6. Start the development servers:
 
 Backend:
 ```bash

@@ -65,3 +65,5 @@ const WeatherForecast = ({ weather, numberOfDays = 3, tripType, isMultiDay }) =>
 };
 
 export default WeatherForecast;
+
+

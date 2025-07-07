@@ -13,13 +13,24 @@ import {
   DialogContent,
   DialogActions,
   Alert,
-  Paper
+  Paper,
+  CardMedia
 } from '@mui/material';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 import L from 'leaflet';
+
+// Helper function to format trip type for display
+const formatTripType = (type) => {
+  switch (type) {
+    case 'foot-hiking': return 'Hiking';
+    case 'cycling-regular': return 'Cycling';
+    case 'driving-car': return 'Driving';
+    default: return type;
+  }
+};
 
 const MyTrips = () => { 
   const { user } = useAuth();
@@ -134,19 +145,24 @@ const MyTrips = () => {
         <Grid container spacing={4}>
           {trips.map((trip) => (
             <Grid item xs={12} md={6} key={trip._id}>
-              <Card>
+              <Card key={trip._id} sx={{ mb: 2, cursor: 'pointer' }} onClick={() => handleTripClick(trip)}>
+                <CardMedia
+                  component="img"
+                  height="140"
+                  image={trip.imageUrl || 'https://images.unsplash.com/photo-1500835556837-99ac94a94552'}
+                  alt={trip.name}
+                  sx={{ objectFit: 'cover' }}
+                />
                 <CardContent>
-                  <Typography variant="h5" component="h2" gutterBottom>
-                    {trip.name}
-                  </Typography>
-                  <Typography color="text.secondary" gutterBottom>
-                    Type: {trip.type}
+                  <Typography variant="h6">{trip.name}</Typography>
+                  <Typography variant="body2">
+                    {formatTripType(trip.type)} Trip
                   </Typography>
                   <Typography variant="body2">
-                    From: {trip.startLocation.city} to {trip.endLocation.city}
+                    {trip.startLocation.city} to {trip.endLocation.city}
                   </Typography>
                   <Typography variant="body2">
-                    Total Distance: {trip.totalDistance}km
+                    {trip.totalDistance} km
                   </Typography>
                 </CardContent>
                 <CardActions>

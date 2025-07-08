@@ -13,7 +13,8 @@ import {
   DialogContent,
   DialogActions,
   Alert,
-  Paper
+  Paper,
+  CardMedia
 } from '@mui/material';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -21,7 +22,17 @@ import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 import L from 'leaflet';
 
-const MyTrips = () => {
+// Helper function to format trip type for display
+const formatTripType = (type) => {
+  switch (type) {
+    case 'foot-hiking': return 'Hiking';
+    case 'cycling-regular': return 'Cycling';
+    case 'driving-car': return 'Driving';
+    default: return type;
+  }
+};
+
+const MyTrips = () => { 
   const { user } = useAuth();
   const [trips, setTrips] = useState([]);
   const [selectedTrip, setSelectedTrip] = useState(null);
@@ -134,19 +145,24 @@ const MyTrips = () => {
         <Grid container spacing={4}>
           {trips.map((trip) => (
             <Grid item xs={12} md={6} key={trip._id}>
-              <Card>
+              <Card key={trip._id} sx={{ mb: 2, cursor: 'pointer' }} onClick={() => handleTripClick(trip)}>
+                <CardMedia
+                  component="img"
+                  height="140"
+                  image={trip.imageUrl || 'https://images.unsplash.com/photo-1500835556837-99ac94a94552'}
+                  alt={trip.name}
+                  sx={{ objectFit: 'cover' }}
+                />
                 <CardContent>
-                  <Typography variant="h5" component="h2" gutterBottom>
-                    {trip.name}
-                  </Typography>
-                  <Typography color="text.secondary" gutterBottom>
-                    Type: {trip.type}
+                  <Typography variant="h6">{trip.name}</Typography>
+                  <Typography variant="body2">
+                    {formatTripType(trip.type)} Trip
                   </Typography>
                   <Typography variant="body2">
-                    From: {trip.startLocation.city} to {trip.endLocation.city}
+                    {trip.startLocation.city} to {trip.endLocation.city}
                   </Typography>
                   <Typography variant="body2">
-                    Total Distance: {trip.totalDistance}km
+                    {trip.totalDistance} km
                   </Typography>
                 </CardContent>
                 <CardActions>
@@ -263,6 +279,30 @@ const MyTrips = () => {
                         opacity={0.7}
                       />
                     )}
+
+                    {/* Driving specific points of interest markers */}
+                    {selectedTrip.type === 'driving-car' && 
+                     selectedTrip.pointsOfInterest && 
+                     selectedTrip.pointsOfInterest.length > 0 && 
+                     selectedTrip.pointsOfInterest.map(poi => (
+                      <Marker 
+                        key={poi.id} 
+                        position={poi.location}
+                        icon={L.divIcon({
+                          className: 'custom-poi-icon',
+                          html: `<div style="background-color: ${poi.isDestination ? '#ff4500' : '#4caf50'}; width: 10px; height: 10px; border-radius: 50%; border: 2px solid white;"></div>`,
+                          iconSize: [15, 15],
+                          iconAnchor: [7, 7]
+                        })}
+                      >
+                        <Popup>
+                          <strong>{poi.name}</strong><br />
+                          Type: {poi.type}<br />
+                          {poi.description && `${poi.description}<br />`}
+                          {poi.isDestination ? '(At Destination)' : '(Along Route)'}
+                        </Popup>
+                      </Marker>
+                    ))}
 
                     <MapViewController 
                       startCoords={[selectedTrip.startLocation.coordinates[1], selectedTrip.startLocation.coordinates[0]]} 
@@ -469,12 +509,125 @@ const MyTrips = () => {
                     Your trip begins in {selectedTrip.startLocation.city} and ends in {selectedTrip.endLocation.city}.
                     Remember to check local regulations and restrictions before your journey.
                   </Typography>
-                  <Typography variant="subtitle1" gutterBottom>
-                    Points of Interest Near Route:
-                  </Typography>
-                  <Typography variant="body2">
-                    • Loading nearby attractions...
-                  </Typography>
+                  
+                  {selectedTrip.type === 'driving-car' && selectedTrip.pointsOfInterest && selectedTrip.pointsOfInterest.length > 0 ? (
+                    <>
+                      <Typography variant="subtitle1" gutterBottom>
+                        Points of Interest:
+                      </Typography>
+                      
+                      <Grid container spacing={2}>
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="subtitle2" gutterBottom>
+                            Along Your Route:
+                          </Typography>
+                          
+                          {/* Group route POIs by type */}
+                          {Object.entries(
+                            selectedTrip.pointsOfInterest
+                              .filter(poi => !poi.isDestination)
+                              .reduce((categories, poi) => {
+                                const category = poi.type.charAt(0).toUpperCase() + poi.type.slice(1).replace(/_/g, ' ');
+                                if (!categories[category]) {
+                                  categories[category] = [];
+                                }
+                                categories[category].push(poi);
+                                return categories;
+                              }, {})
+                          ).map(([category, pois]) => (
+                            <Box key={category} sx={{ mb: 2 }}>
+                              <Typography variant="body1" fontWeight="bold" color="primary.main">
+                                {category}
+                              </Typography>
+                              <Box component="ul" sx={{ pl: 2, mt: 0.5 }}>
+                                {pois.map(poi => (
+                                  <Box component="li" key={poi.id}>
+                                    <Typography variant="body2">
+                                      <Box 
+                                        component="a"
+                                        href={`https://www.google.com/search?q=${encodeURIComponent(poi.name + ' ' + selectedTrip.endLocation.city)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        sx={{ 
+                                          color: 'primary.main',
+                                          textDecoration: 'none',
+                                          '&:hover': { 
+                                            textDecoration: 'underline',
+                                            fontWeight: 'medium'
+                                          }
+                                        }}
+                                      >
+                                        {poi.name}
+                                      </Box>
+                                    </Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            </Box>
+                          ))}
+                        </Grid>
+                        
+                        <Grid item xs={12} md={6}>
+                          <Typography variant="subtitle2" gutterBottom>
+                            At Your Destination:
+                          </Typography>
+                          
+                          {/* Group destination POIs by type */}
+                          {Object.entries(
+                            selectedTrip.pointsOfInterest
+                              .filter(poi => poi.isDestination)
+                              .reduce((categories, poi) => {
+                                const category = poi.type.charAt(0).toUpperCase() + poi.type.slice(1).replace(/_/g, ' ');
+                                if (!categories[category]) {
+                                  categories[category] = [];
+                                }
+                                categories[category].push(poi);
+                                return categories;
+                              }, {})
+                          ).map(([category, pois]) => (
+                            <Box key={category} sx={{ mb: 2 }}>
+                              <Typography variant="body1" fontWeight="bold" color="primary.main">
+                                {category}
+                              </Typography>
+                              <Box component="ul" sx={{ pl: 2, mt: 0.5 }}>
+                                {pois.map(poi => (
+                                  <Box component="li" key={poi.id}>
+                                    <Typography variant="body2">
+                                      <Box 
+                                        component="a"
+                                        href={`https://www.google.com/search?q=${encodeURIComponent(poi.name + ' ' + selectedTrip.endLocation.city)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        sx={{ 
+                                          color: 'primary.main',
+                                          textDecoration: 'none',
+                                          '&:hover': { 
+                                            textDecoration: 'underline',
+                                            fontWeight: 'medium'
+                                          }
+                                        }}
+                                      >
+                                        {poi.name}
+                                      </Box>
+                                    </Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            </Box>
+                          ))}
+                        </Grid>
+                      </Grid>
+                    </>
+                  ) : (
+                    <>
+                      <Typography variant="subtitle1" gutterBottom>
+                        Points of Interest Near Route:
+                      </Typography>
+                      <Typography variant="body2">
+                        • Loading nearby attractions...
+                      </Typography>
+                    </>
+                  )}
                 </Paper>
               </DialogContent>
               <DialogActions>

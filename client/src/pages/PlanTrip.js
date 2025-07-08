@@ -1,32 +1,35 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Container,
   Paper,
   Typography,
   Box,
-  TextField,
-  Button,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Grid,
-  Alert,
   CircularProgress
 } from '@mui/material';
-import polyline from '@mapbox/polyline';
-
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
 import axios from 'axios';
-import { useAuth } from '../contexts/AuthContext';
 
 // Fix for default marker icons in Leaflet with React
-import L from 'leaflet';
 import icon from 'leaflet/dist/images/marker-icon.png';
 import iconShadow from 'leaflet/dist/images/marker-shadow.png';
+import { useAuth } from '../contexts/AuthContext';
 
+// Import components
+import TripForm from '../components/trips/TripForm';
+import TripMap from '../components/trips/TripMap';
+import WeatherForecast from '../components/trips/WeatherForecast';
+import PointsOfInterest from '../components/trips/PointsOfInterest';
+import CyclingPlan from '../components/trips/CyclingPlan';
+
+// Import services
+import { planRoute, calculateMinimumDays } from '../services/routeService';
+import { fetchWeatherForecast } from '../services/weatherService';
+import { fetchPointsOfInterest } from '../services/poiService';
+import { saveTrip as saveTripService } from '../services/tripService';
+
+// Set up the default marker icon for Leaflet
 L.Marker.prototype.options.icon = L.icon({
   iconUrl: icon,
   shadowUrl: iconShadow,
@@ -34,21 +37,18 @@ L.Marker.prototype.options.icon = L.icon({
   iconAnchor: [12, 41]
 });
 
-// Create a component to handle map view updates
-const MapController = ({ route }) => {
-  const map = useMap();
-  
-  React.useEffect(() => {
-    if (route && route.length > 0) {
-      // Create a bounds object from all route points
-      const bounds = L.latLngBounds(route);
-      
-      // Fit the map to these bounds with some padding
-      map.fitBounds(bounds, { padding: [50, 50] });
-    }
-  }, [map, route]);
-  
-  return null;
+// Helper function to get default image by trip type
+const getDefaultImageByTripType = (type) => {
+  switch (type) {
+    case 'foot-hiking':
+      return 'https://images.unsplash.com/photo-1551632811-561732d1e306';
+    case 'cycling-regular':
+      return 'https://images.unsplash.com/photo-1541625602330-2277a4c46182';
+    case 'driving-car':
+      return 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800';
+    default:
+      return 'https://images.unsplash.com/photo-1500835556837-99ac94a94552';
+  }
 };
 
 const PlanTrip = () => {
@@ -57,269 +57,191 @@ const PlanTrip = () => {
   const location = useLocation();
   const tripOptions = location.state || {};
   
-  // Initialize state with values from navigation or defaults
-  const [tripType, setTripType] = useState(tripOptions.tripType || 'foot-hiking');
-  const [routePreference, setRoutePreference] = useState(tripOptions.preference || 'recommended');
+  // State for form data
+  const [formData, setFormData] = useState({
+    tripType: tripOptions.tripType || 'foot-hiking',
+    routePreference: tripOptions.preference || 'recommended',
+    isCircular: tripOptions.options?.isCircular || false,
+    isMultiDay: tripOptions.options?.isMultiDay || false,
+    maxDistancePerDay: tripOptions.options?.maxDistancePerDay || 
+      (tripOptions.tripType === 'foot-hiking' ? 15 : 
+       tripOptions.tripType === 'cycling-regular' ? 60 : 0),
+    minDistancePerDay: tripOptions.options?.minDistancePerDay || 
+      (tripOptions.tripType === 'foot-hiking' ? 5 : 0),
+    startLocation: '',
+    endLocation: '',
+    numberOfDays: tripOptions.options?.numberOfDays || 2
+  });
   
-  // Trip-specific options
-  const [isCircular, setIsCircular] = useState(tripOptions.options?.isCircular || false);
-  const [isMultiDay, setIsMultiDay] = useState(tripOptions.options?.isMultiDay || false);
-  const [maxDistancePerDay, setMaxDistancePerDay] = useState(
-    tripOptions.options?.maxDistancePerDay || 
-    (tripType === 'foot-hiking' ? 15 : tripType === 'cycling-regular' ? 60 : 0)
-  );
-  const [minDistancePerDay, setMinDistancePerDay] = useState(
-    tripOptions.options?.minDistancePerDay || 
-    (tripType === 'foot-hiking' ? 5 : 0)
-  );
-  
-  const [startLocation, setStartLocation] = useState('');
-  const [endLocation, setEndLocation] = useState('');
+  // State for API data and UI
   const [route, setRoute] = useState([]);
   const [weather, setWeather] = useState(null);
+  const [pointsOfInterest, setPointsOfInterest] = useState([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [numberOfDays, setNumberOfDays] = useState(
-    tripOptions.options?.numberOfDays || 2
-  );
-
-  const validateLocation = async (location) => {
-    try {
-      const response = await axios.get(`https://nominatim.openstreetmap.org/search`, {
-        params: { q: location, format: 'json', limit: 1 }
-      });
-      return response.data.length > 0 ? response.data[0] : null;
-    } catch (error) {
-      console.error('Error validating location:', error);
-      return null;
-    }
+  const [imageUrl, setImageUrl] = useState(null);
+  
+  // Handle form input changes
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  // Fetch trip image from Unsplash API
+const fetchTripImage = async (location, type) => {
+  try {
+    // Show loading state
     setLoading(true);
-    setError('');
-    setRoute([]);
-
-    try {
-      // For circular hiking routes, set end location to start location
-      let actualEndLocation = endLocation;
-      if (tripType === 'foot-hiking' && isCircular) {
-        actualEndLocation = startLocation;
-      }
-      
-      // Validate locations
-      console.log('Validating start location...');
-      const startResult = await validateLocation(startLocation);
-      console.log('Start location validation result:', startResult);
-
-      console.log('Validating end location...');
-      const endResult = await validateLocation(actualEndLocation);
-      console.log('End location validation result:', endResult);
-
-      if (!startResult || !endResult) {
-        let errorMsg = 'One or both locations could not be found.';
-        
-        // Add more specific error messages
-        if (!startResult && !endResult) {
-          errorMsg = 'Neither start nor end location could be found. Try using city names or addresses.';
-        } else if (!startResult) {
-          errorMsg = 'Start location could not be found. Try a more specific location name.';
-        } else {
-          errorMsg = 'End location could not be found. Try a more specific location name.';
-        }
-        
-        console.error(errorMsg);
-        setError(errorMsg);
-        setLoading(false);
-        return;
-      }
-
-      // Extract coordinates
-      const startCoords = [parseFloat(startResult.lon), parseFloat(startResult.lat)];
-      const endCoords = [parseFloat(endResult.lon), parseFloat(endResult.lat)];
-      console.log('Start coordinates [lon, lat]:', startCoords);
-      console.log('End coordinates [lon, lat]:', endCoords);
-
-      // Modify the API options section in your handleSubmit function
-      const apiOptions = {
-        format: 'geojson',
-        preference: routePreference,
-        instructions: false
-      };
-      
-      // Add type-specific API parameters
-      if (tripType === 'foot-hiking' && isCircular) {
-        // For circular routes, only send the start coordinate
-        apiOptions.coordinates = [startCoords];
-        apiOptions.options = {
-          round_trip: {
-            length: maxDistancePerDay * 1000, // Convert to meters
-            points: 3,
-            seed: Math.floor(Math.random() * 100) // Random seed for variation
-          }
-        };
-      } else {
-        // For normal routes, send both start and end coordinates
-        apiOptions.coordinates = [startCoords, endCoords];
-      }
-      
-      // Call the OpenRouteService API with the updated options
-      const response = await axios.post(
-        `https://api.openrouteservice.org/v2/directions/${tripType}`,
-        apiOptions,
-        {
-          headers: {
-            'Authorization': process.env.REACT_APP_ORS_API_KEY,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      console.log('OpenRouteService API response:', response.data);
-      console.log('Routes array:', response.data.routes);
-
-      if (!response.data.routes || response.data.routes.length === 0) {
-        console.error('No routes returned from the API');
-        setError('No route found between these locations. Please try different locations or a different transport mode.');
-        setLoading(false);
-        return;
-      }
-
-      // Randomly select one of the alternative routes
-      const randomIndex = Math.floor(Math.random() * response.data.routes.length);
-      const selectedRoute = response.data.routes[randomIndex];
-
-      console.log('Selected route:', selectedRoute);
-      console.log('Route geometry:', selectedRoute.geometry);
-
-
-      const decodedGeometry = polyline.decode(selectedRoute.geometry);
-
-      // Convert to [lat, lon] format as expected by Leaflet
-      const routeCoordinates = decodedGeometry.map(coord => [coord[0], coord[1]]);
-
-      console.log('Extracted route coordinates (first and last):', 
-      routeCoordinates.length > 0 ? [routeCoordinates[0], routeCoordinates[routeCoordinates.length-1]] : 'None');
-
-      
-      setRoute(routeCoordinates);
-
-      // Get weather data for start location
-      console.log('Fetching weather data...');
-      const weatherResponse = await axios.get(
-        `https://api.openweathermap.org/data/2.5/forecast?lat=${startResult.lat}&lon=${startResult.lon}&appid=${process.env.REACT_APP_WEATHER_API_KEY}&units=metric`
-      );
-      console.log('Weather API response received');
-      setWeather(weatherResponse.data);
-      console.log('Trip planning completed successfully');
-    } catch (err) {
-      //console.error('Error planning trip:', err);
-      //console.error('Error details:', err.response?.data || err.message);
-      setError('Failed to plan trip: ' + (err.response?.data?.error?.message || err.message));
-    } finally {
-      setLoading(false);
+    
+    // Check if Unsplash API key is configured
+    const unsplashApiKey = process.env.REACT_APP_UNSPLASH_API_KEY;
+    if (!unsplashApiKey) {
+      console.warn('No Unsplash API key found. Please add REACT_APP_UNSPLASH_API_KEY to your .env file.');
+      // Use default image based on trip type
+      const defaultImage = getDefaultImageByTripType(type);
+      setImageUrl(defaultImage);
+      setFormData(prev => ({ ...prev, imageUrl: defaultImage }));
+      return;
     }
-  };
 
-  // Add this function after handleSubmit but before saveTrip
-  const calculateMinimumDays = (totalDistanceKm) => {
-    if (tripType === 'cycling-regular') {
-      // For cycling, minimum days = total distance / max distance per day (rounded up)
-      return Math.max(1, Math.ceil(totalDistanceKm / maxDistancePerDay));
-    }
-    return 1; // Default for other trip types
-  };
+    // Function to build optimized search queries
+    const buildSearchQueries = (location, type) => {
+      // Clean up the location name (remove postal codes, special characters)
+      const cleanLocation = location.replace(/\d+/g, '').trim();
+      
+      // Extract potential city and country (simple split by comma)
+      const locationParts = cleanLocation.split(',').map(part => part.trim());
+      const city = locationParts[0];
+      const country = locationParts.length > 1 ? locationParts[locationParts.length - 1] : '';
+      
+      // Activity terms based on trip type
+      const activityTerm = type === 'foot-hiking' ? 'hiking' : 
+                          type === 'cycling-regular' ? 'cycling' : 'road trip';
 
-  const saveTrip = async () => {
-    try {
-      // Format coordinates correctly for MongoDB
-      const formattedRoute = route.map(coord => [coord[1], coord[0]]);
+      // Scenic terms to try
+      const scenicTerms = ['landscape', 'scenic', 'nature', 'landmark', 'mountains', 'travel'];
       
-      // Calculate total distance from the route
-      let totalDistance = 0;
-      if (route.length > 1) {
-        for (let i = 1; i < route.length; i++) {
-          const p1 = L.latLng(route[i-1][0], route[i-1][1]);
-          const p2 = L.latLng(route[i][0], route[i][1]);
-          totalDistance += p1.distanceTo(p2) / 1000; // Convert to km
-        }
-      }
-      
-      // Ensure we have enough days for cycling trips
-      let actualDays = numberOfDays;
-      if (tripType === 'cycling-regular' && isMultiDay) {
-        const minDaysNeeded = Math.max(1, Math.ceil(totalDistance / maxDistancePerDay));
-        actualDays = Math.max(numberOfDays, minDaysNeeded);
-      }
-      
-      // Create daily distances array based on trip type
-      let dailyDistances = [];
-      
-      if (tripType === 'cycling-regular' && isMultiDay) {
-        // For multi-day cycling, divide the total distance by the actual number of days
-        const avgDistancePerDay = totalDistance / actualDays;
+      // Prepare multiple search queries in order of preference
+      const queries = [
+        // Try specific location + activity (most specific)
+        `${cleanLocation} ${activityTerm}`,
         
-        for (let day = 1; day <= actualDays; day++) {
-          dailyDistances.push({ 
-            day, 
-            distance: Math.round(avgDistancePerDay * 10) / 10 // Round to 1 decimal place
-          });
-        }
-      } else {
-        // Default daily distance for other trip types
-        dailyDistances = [{ day: 1, distance: Math.round(totalDistance * 10) / 10 }];
-      }
+        // Try city + activity if we have a distinct city
+        city ? `${city} ${activityTerm}` : null,
+        
+        // Try country + activity if we have a country
+        country ? `${country} ${activityTerm}` : null,
+        
+        // Try location + scenic alternatives
+        ...scenicTerms.map(term => `${cleanLocation} ${term}`),
+        
+        // Try city + scenic alternatives
+        ...(city ? scenicTerms.map(term => `${city} ${term}`) : []),
+        
+        // Try country + scenic alternatives
+        ...(country ? scenicTerms.map(term => `${country} ${term}`) : []),
+        
+        // Try just location terms
+        cleanLocation,
+        city,
+        country,
+        
+        // Fall back to activity + scenic (most generic)
+        `${activityTerm} scenic`,
+        `${activityTerm} adventure`,
+        activityTerm
+      ].filter(Boolean); // Remove any null entries
       
-      const tripData = {
-        name: `${tripType} Trip from ${startLocation} to ${endLocation}`,
-        type: tripType,
-        startLocation: { 
-          coordinates: [route[0][1], route[0][0]],
-          city: startLocation, 
-          country: 'Country' 
-        },
-        endLocation: { 
-          coordinates: [route[route.length - 1][1], route[route.length - 1][0]],
-          city: endLocation, 
-          country: 'Country' 
-        },
-        route: { 
-          coordinates: formattedRoute
-        },
-        dailyDistances: dailyDistances,
-        totalDistance: Math.round(totalDistance * 10) / 10,
-        isMultiDay: tripType === 'cycling-regular' ? isMultiDay : false,
-        maxDistancePerDay: tripType === 'cycling-regular' ? maxDistancePerDay : 0,
-        numberOfDays: tripType === 'cycling-regular' && isMultiDay ? actualDays : 1,
-        startDate: new Date(),
-        endDate: new Date(Date.now() + (actualDays || 1) * 24 * 60 * 60 * 1000)
-      };
+      // Remove duplicates
+      return [...new Set(queries)];
+    };
 
-      console.log('Sending trip data:', tripData);
-
-      const response = await axios.post('http://localhost:5000/api/trips', tripData, {
-        headers: { 
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-          'Content-Type': 'application/json'
+    // Get our prioritized search queries
+    const searchQueries = buildSearchQueries(location, type);
+    
+    // Try each search query in sequence until we find results
+    let imageFound = false;
+    let newImageUrl = null;
+    
+    for (const query of searchQueries) {
+      if (imageFound) break;
+      
+      console.log(`Trying to find image with query: "${query}"`);
+      
+      // Use Unsplash API to search for relevant images
+      const response = await axios.get(`https://api.unsplash.com/search/photos`, {
+        params: {
+          query: query,
+          per_page: 5, // Get more options to choose from
+          orientation: 'landscape', // Prefer landscape images for trip banners
+          content_filter: 'high', // Try to get high-quality, safe content
+          order_by: 'relevant' // Order by relevance
+        },
+        headers: {
+          'Authorization': `Client-ID ${unsplashApiKey}`
         }
       });
-
-      console.log('Trip saved successfully:', response.data);
-      navigate('/trips');
-    } catch (err) {
-      console.error('Error saving trip:', err);
-      // Log more detailed error information
-      if (err.response) {
-        console.error('Server error details:', err.response.data);
+      
+      if (response.data.results && response.data.results.length > 0) {
+        // Get a random image from the results to add variety
+        const randomIndex = Math.floor(Math.random() * Math.min(5, response.data.results.length));
+        newImageUrl = response.data.results[randomIndex].urls.regular;
+        
+        // Add credit info to be displayed in the UI
+        const photographerName = response.data.results[randomIndex].user?.name || "Unknown";
+        const photoDescription = response.data.results[randomIndex].description || 
+                                response.data.results[randomIndex].alt_description || 
+                                `${type} trip to ${location}`;
+        
+        // Store the query that successfully found an image
+        console.log(`Found image using query: "${query}" by ${photographerName}`);
+        
+        imageFound = true;
       }
-      setError('Failed to save trip: ' + (err.response?.data?.message || 'Server error'));
     }
-  };
+    
+    if (imageFound && newImageUrl) {
+      // Store the image URL from the response
+      setImageUrl(newImageUrl);
+      
+      // Update form data to include the image URL
+      setFormData(prev => ({
+        ...prev,
+        imageUrl: newImageUrl
+      }));
+    } else {
+      // If no image found after all queries, use a default image based on trip type
+      const defaultImage = getDefaultImageByTripType(type);
+      
+      setImageUrl(defaultImage);
+      setFormData(prev => ({
+        ...prev,
+        imageUrl: defaultImage
+      }));
+    }
+  } catch (err) {
+    console.error('Error fetching trip image:', err);
+    // Use fallback image on error
+    const fallbackImage = getDefaultImageByTripType(type);
+    setImageUrl(fallbackImage);
+    setFormData(prev => ({
+      ...prev,
+      imageUrl: fallbackImage
+    }));
+    
+    // Don't show an error to the user for this, just log it
+    console.warn('Using fallback image due to API error:', err.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
-  // Add this useEffect near the top of your component, with your other state declarations
-  React.useEffect(() => {
-    if (route.length > 0 && tripType === 'cycling-regular' && isMultiDay) {
+  // Adjust days if needed when route changes
+  useEffect(() => {
+    if (route.length > 0 && formData.tripType === 'cycling-regular' && formData.isMultiDay) {
       // Calculate total distance
       let totalDistanceKm = 0;
       for (let i = 1; i < route.length; i++) {
@@ -329,14 +251,159 @@ const PlanTrip = () => {
       }
       
       // Calculate minimum days
-      const minDaysNeeded = Math.max(1, Math.ceil(totalDistanceKm / maxDistancePerDay));
+      const minDaysNeeded = Math.max(1, Math.ceil(totalDistanceKm / formData.maxDistancePerDay));
       
       // Update days if below minimum
-      if (minDaysNeeded > numberOfDays) {
-        setNumberOfDays(minDaysNeeded);
+      if (minDaysNeeded > formData.numberOfDays) {
+        setFormData(prev => ({
+          ...prev,
+          numberOfDays: minDaysNeeded
+        }));
       }
     }
-  }, [route, tripType, isMultiDay, maxDistancePerDay]);
+  }, [route, formData.tripType, formData.isMultiDay, formData.maxDistancePerDay, formData.numberOfDays]);
+
+  // Handle form submission
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setRoute([]);
+    setImageUrl(null); // Reset image URL when planning a new trip
+
+    try {
+      // Plan the route using routeService
+      const routeResult = await planRoute({
+        startLocation: formData.startLocation,
+        endLocation: formData.endLocation,
+        tripType: formData.tripType,
+        routePreference: formData.routePreference,
+        isCircular: formData.isCircular,
+        maxDistancePerDay: formData.maxDistancePerDay
+      });
+      
+      setRoute(routeResult.coordinates);
+      
+      // Fetch points of interest
+      const pois = await fetchPointsOfInterest(routeResult.coordinates, formData.tripType);
+      setPointsOfInterest(pois);
+      
+      // Get weather data for start location
+      const weatherData = await fetchWeatherForecast({
+        lat: routeResult.startLocationRaw.lat,
+        lon: routeResult.startLocationRaw.lon
+      });
+      setWeather(weatherData);
+      
+      // Try to get the most relevant location information for the image
+      let imageSearchLocation;
+      
+      if (formData.tripType === 'foot-hiking' && formData.isCircular) {
+        // For circular hiking trips, only use the start location
+        imageSearchLocation = formData.startLocation;
+      } else if (formData.endLocation && formData.endLocation.trim() !== '') {
+        // For trips with an end destination, prioritize that for the image
+        imageSearchLocation = formData.endLocation;
+      } else {
+        // Fallback to start location
+        imageSearchLocation = formData.startLocation;
+      }
+      
+      // Fetch a relevant image based on the location and trip type
+      await fetchTripImage(imageSearchLocation, formData.tripType);
+      
+    } catch (err) {
+      console.error('Error planning trip:', err);
+      setError('Failed to plan trip: ' + (err.response?.data?.error?.message || err.message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Save trip to database
+  const handleSaveTrip = async () => {
+    try {
+      // Import the function at the top of the file if you haven't already
+      // import { formatTripDataForSaving } from '../services/tripService';
+      
+      // Use formData properties instead of direct variables
+      const tripData = {
+        name: `${formData.tripType === 'foot-hiking' ? 'Hiking' : 
+               formData.tripType === 'cycling-regular' ? 'Cycling' : 'Driving'} Trip from ${formData.startLocation} to ${formData.endLocation}`,
+        type: formData.tripType,
+        startLocation: { 
+          coordinates: [route[0][1], route[0][0]],
+          city: formData.startLocation, 
+          country: 'Country' 
+        },
+        endLocation: { 
+          coordinates: [route[route.length - 1][1], route[route.length - 1][0]],
+          city: formData.endLocation, 
+          country: 'Country' 
+        },
+        route: { 
+          coordinates: route.map(coord => [coord[1], coord[0]])
+        },
+        dailyDistances: calculateDailyDistances(route, formData.tripType, formData.numberOfDays, formData.isMultiDay, formData.maxDistancePerDay),
+        totalDistance: calculateTotalDistance(route),
+        isMultiDay: formData.tripType === 'cycling-regular' ? formData.isMultiDay : false,
+        maxDistancePerDay: formData.tripType === 'cycling-regular' ? formData.maxDistancePerDay : 0,
+        numberOfDays: formData.tripType === 'cycling-regular' && formData.isMultiDay ? formData.numberOfDays : 1,
+        startDate: new Date(),
+        endDate: new Date(Date.now() + (formData.numberOfDays || 1) * 24 * 60 * 60 * 1000),
+        pointsOfInterest: pointsOfInterest,
+        imageUrl: imageUrl
+      };
+
+      console.log('Sending trip data:', tripData);
+      
+      // Use the saveTripService function imported at the top
+      await saveTripService(tripData, localStorage.getItem('token'));
+      navigate('/trips');
+    } catch (err) {
+      console.error('Error saving trip:', err);
+      if (err.response) {
+        console.error('Server error details:', err.response.data);
+      }
+      setError('Failed to save trip: ' + (err.response?.data?.message || 'Server error'));
+    }
+  };
+
+  // Add these helper functions at an appropriate place in your file
+  const calculateTotalDistance = (route) => {
+    let totalDistanceKm = 0;
+    if (route.length > 1) {
+      for (let i = 1; i < route.length; i++) {
+        const p1 = L.latLng(route[i-1][0], route[i-1][1]);
+        const p2 = L.latLng(route[i][0], route[i][1]);
+        totalDistanceKm += p1.distanceTo(p2) / 1000; // Convert to km
+      }
+    }
+    return Math.round(totalDistanceKm * 10) / 10; // Round to 1 decimal place
+  };
+
+  const calculateDailyDistances = (route, tripType, numberOfDays, isMultiDay, maxDistancePerDay) => {
+    const totalDistance = calculateTotalDistance(route);
+    let actualDays = numberOfDays;
+    
+    if (tripType === 'cycling-regular' && isMultiDay) {
+      const minDaysNeeded = Math.max(1, Math.ceil(totalDistance / maxDistancePerDay));
+      actualDays = Math.max(numberOfDays, minDaysNeeded);
+    }
+    
+    if (tripType === 'cycling-regular' && isMultiDay) {
+      // For multi-day cycling, divide the total distance by the actual number of days
+      const avgDistancePerDay = totalDistance / actualDays;
+      
+      return Array.from({ length: actualDays }, (_, i) => ({ 
+        day: i + 1, 
+        distance: Math.round(avgDistancePerDay * 10) / 10 // Round to 1 decimal place
+      }));
+    } else {
+      // Default daily distance for other trip types
+      return [{ day: 1, distance: totalDistance }];
+    }
+  };
 
   return (
     <Container>
@@ -346,331 +413,59 @@ const PlanTrip = () => {
         </Typography>
 
         <Grid container spacing={4}>
+          {/* Trip Form */}
           <Grid item xs={12} md={4}>
             <Paper elevation={3} sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
-                <FormControl fullWidth margin="normal">
-                  <InputLabel>Trip Type</InputLabel>
-                  <Select value={tripType} onChange={(e) => setTripType(e.target.value)} required>
-                    <MenuItem value="foot-hiking">Hiking</MenuItem>
-                    <MenuItem value="cycling-regular">Bicycling</MenuItem>
-                    <MenuItem value="driving-car">Driving</MenuItem>
-                  </Select>
-                </FormControl>
-
-                <FormControl fullWidth margin="normal">
-                  <InputLabel>Route Preference</InputLabel>
-                  <Select 
-                    value={routePreference} 
-                    onChange={(e) => setRoutePreference(e.target.value)}
-                  >
-                    <MenuItem value="recommended">Recommended</MenuItem>
-                    <MenuItem value="shortest">Shortest</MenuItem>
-                    <MenuItem value="fastest">Fastest</MenuItem>
-                  </Select>
-                </FormControl>
-
-                {/* Trip-specific options */}
-                {tripType === 'foot-hiking' && (
-                  <>
-                    <FormControl fullWidth margin="normal">
-                      <InputLabel>Route Type</InputLabel>
-                      <Select 
-                        value={isCircular ? 'circular' : 'one-way'} 
-                        onChange={(e) => setIsCircular(e.target.value === 'circular')}
-                      >
-                        <MenuItem value="circular">Circular (Return to start)</MenuItem>
-                        <MenuItem value="one-way">One-way (Different end point)</MenuItem>
-                      </Select>
-                    </FormControl>
-                    
-                    <Grid container spacing={2}>
-                      <Grid item xs={6}>
-                        <TextField
-                          fullWidth
-                          label="Min Distance/Day (km)"
-                          type="number"
-                          value={minDistancePerDay}
-                          onChange={(e) => setMinDistancePerDay(e.target.value)}
-                          margin="normal"
-                          InputProps={{ inputProps: { min: 1, max: 30 } }}
-                        />
-                      </Grid>
-                      <Grid item xs={6}>
-                        <TextField
-                          fullWidth
-                          label="Max Distance/Day (km)"
-                          type="number"
-                          value={maxDistancePerDay}
-                          onChange={(e) => setMaxDistancePerDay(e.target.value)}
-                          margin="normal"
-                          InputProps={{ inputProps: { min: 5, max: 30 } }}
-                        />
-                      </Grid>
-                    </Grid>
-                  </>
-                )}
-                
-                {tripType === 'cycling-regular' && (
-                  <>
-                    <FormControl fullWidth margin="normal">
-                      <InputLabel>Trip Duration</InputLabel>
-                      <Select 
-                        value={isMultiDay ? 'multi-day' : 'single-day'} 
-                        onChange={(e) => setIsMultiDay(e.target.value === 'multi-day')}
-                      >
-                        <MenuItem value="multi-day">Multi-day</MenuItem>
-                        <MenuItem value="single-day">Single day</MenuItem>
-                      </Select>
-                    </FormControl>
-                    
-                    <TextField
-                      fullWidth
-                      label="Max Distance/Day (km)"
-                      type="number"
-                      value={maxDistancePerDay}
-                      onChange={(e) => setMaxDistancePerDay(e.target.value)}
-                      margin="normal"
-                      InputProps={{ inputProps: { min: 10, max: 100 } }}
-                      helperText="For cycling trips, aim for 40-60km per day for comfortable multi-day journeys"
-                    />
-                    
-                    {isMultiDay && (
-                      <TextField
-                        fullWidth
-                        label="Number of Days"
-                        type="number"
-                        value={numberOfDays || 2}
-                        onChange={(e) => setNumberOfDays(e.target.value)}
-                        margin="normal"
-                        InputProps={{ inputProps: { min: 2, max: 14 } }}
-                      />
-                    )}
-                  </>
-                )}
-
-                <TextField
-                  fullWidth
-                  label="Start Location"
-                  value={startLocation}
-                  onChange={(e) => setStartLocation(e.target.value)}
-                  margin="normal"
-                  required
-                />
-
-                <TextField
-                  fullWidth
-                  label="End Location"
-                  value={endLocation}
-                  onChange={(e) => setEndLocation(e.target.value)}
-                  margin="normal"
-                  required={!(tripType === 'foot-hiking' && isCircular)}
-                  disabled={tripType === 'foot-hiking' && isCircular}
-                  helperText={tripType === 'foot-hiking' && isCircular ? 'End location same as start for circular routes' : ''}
-                />
-
-                {/* Move the buttons to the bottom of the form */}
-                <Box sx={{ mt: 'auto', pt: 2 }}>
-                  <Button
-                    fullWidth
-                    type="submit"
-                    variant="contained"
-                    color="primary"
-                    size="large"
-                    disabled={loading}
-                    sx={{ mb: 2 }}
-                  >
-                    {loading ? 'Planning...' : 'Plan Trip'}
-                  </Button>
-                  
-                  {route.length > 0 && (
-                    <Button
-                      fullWidth
-                      variant="contained"
-                      color="secondary"
-                      size="large"
-                      onClick={saveTrip}
-                    >
-                      Save Trip
-                    </Button>
-                  )}
-                </Box>
-              </form>
-
-              {error && (
-                <Alert severity="error" sx={{ mt: 2 }}>
-                  {error}
-                </Alert>
-              )}
+              <TripForm 
+                formData={formData}
+                handleChange={handleChange}
+                handleSubmit={handleSubmit}
+                imageUrl={imageUrl}
+                error={error}
+                loading={loading}
+                route={route}
+                saveTrip={handleSaveTrip}
+              />
             </Paper>
           </Grid>
 
+          {/* Map */}
           <Grid item xs={12} md={8}>
             <Paper elevation={3} sx={{ height: '100%', minHeight: '600px', p: 0, overflow: 'hidden' }}>
-              <MapContainer 
-                center={[51.505, -0.09]} 
-                zoom={13} 
-                style={{ height: '100%', width: '100%', minHeight: '600px' }}
-              >
-                <TileLayer
-                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                />
-                {route.length > 0 && (
-                  <>
-                    <Marker position={route[0]}>
-                      <Popup>Start Location</Popup>
-                    </Marker>
-                    <Marker position={route[route.length - 1]}>
-                      <Popup>End Location</Popup>
-                    </Marker>
-                    <Polyline positions={route} color="blue" weight={3} opacity={0.7} />
-                    <MapController route={route} />
-                  </>
-                )}
-              </MapContainer>
+              <TripMap 
+                route={route} 
+                pointsOfInterest={pointsOfInterest}
+                tripType={formData.tripType}
+              />
             </Paper>
           </Grid>
         </Grid>
 
+        {/* Weather Forecast */}
         {weather && (
-          <Paper elevation={3} sx={{ p: 3, mt: 4 }}>
-            <Typography variant="h6" gutterBottom>
-              Weather Forecast
-            </Typography>
-            <Grid container spacing={2}>
-              {weather && weather.list && 
-                // Group forecasts by day and get one forecast per day
-                Object.values(
-                  weather.list.reduce((days, item) => {
-                    // Get date without time
-                    const date = new Date(item.dt * 1000).toLocaleDateString();
-                    // If we don't have this day yet, add it
-                    if (!days[date]) {
-                      days[date] = item;
-                    }
-                    return days;
-                  }, {})
-                )
-                .slice(0, 3) // Take first 3 days
-                .map((forecast, index) => (
-                  <Grid item xs={12} md={4} key={index}>
-                    <Paper elevation={1} sx={{ p: 2 }}>
-                      <Typography variant="subtitle1">
-                        {new Date(forecast.dt * 1000).toLocaleDateString()} 
-                      </Typography>
-                      <Typography variant="h6">{Math.round(forecast.main.temp)}°C</Typography>
-                      <Typography variant="body2">{forecast.weather[0].description}</Typography>
-                      <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                        <img 
-                          src={`https://openweathermap.org/img/wn/${forecast.weather[0].icon}.png`} 
-                          alt={forecast.weather[0].description}
-                        />
-                        <Typography variant="body2" sx={{ ml: 1 }}>
-                          Humidity: {forecast.main.humidity}%
-                        </Typography>
-                      </Box>
-                    </Paper>
-                  </Grid>
-                ))
-              }
-            </Grid>
-          </Paper>
+          <WeatherForecast 
+            weather={weather} 
+            numberOfDays={formData.numberOfDays}
+            tripType={formData.tripType}
+            isMultiDay={formData.isMultiDay}
+          />
         )}
         
-        {route.length > 0 && tripType === 'cycling-regular' && isMultiDay && (
-          <Paper elevation={3} sx={{ p: 3, mt: 4 }}>
-            <Typography variant="h6" gutterBottom>
-              Daily Cycling Plan
-            </Typography>
-            
-            {/* Calculate total distance in km */}
-            {(() => {
-              let totalDistanceKm = 0;
-              if (route.length > 1) {
-                for (let i = 1; i < route.length; i++) {
-                  const p1 = L.latLng(route[i-1][0], route[i-1][1]);
-                  const p2 = L.latLng(route[i][0], route[i][1]);
-                  totalDistanceKm += p1.distanceTo(p2) / 1000; // Convert to km
-                }
-              }
-              
-              // Calculate minimum days needed based on max distance per day
-              const minDaysNeeded = calculateMinimumDays(totalDistanceKm);
-              
-              // If user selected fewer days than minimum required, show warning
-              const actualDays = Math.max(numberOfDays, minDaysNeeded);
-              
-              // If we need to adjust the days, update the state
-              if (actualDays > numberOfDays) {
-                // We can't call setNumberOfDays directly here because it would trigger a re-render
-                // Add useEffect to handle this separately
-                return (
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body1">
-                      Your cycling trip is approximately {Math.round(totalDistanceKm)} km in total.
-                    </Typography>
-                    {minDaysNeeded > numberOfDays && (
-                      <Alert severity="warning" sx={{ mb: 2 }}>
-                        Based on your maximum of {maxDistancePerDay}km per day, this trip requires at least {minDaysNeeded} days.
-                        We've adjusted your plan accordingly.
-                      </Alert>
-                    )}
-                    <Typography variant="body2" color="text.secondary">
-                      We recommend cycling about {Math.round(totalDistanceKm / actualDays)} km per day.
-                    </Typography>
-                    
-                    <Grid container spacing={2} sx={{ mt: 1 }}>
-                      {Array.from({ length: actualDays }, (_, i) => i + 1).map(day => (
-                        <Grid item xs={6} md={3} key={day}>
-                          <Paper elevation={1} sx={{ p: 2, textAlign: 'center' }}>
-                            <Typography variant="subtitle1">
-                              Day {day}
-                            </Typography>
-                            <Typography variant="h6">
-                              {Math.round(totalDistanceKm / actualDays)} km
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              {Math.round((totalDistanceKm / actualDays) / 15)} hours
-                            </Typography>
-                          </Paper>
-                        </Grid>
-                      ))}
-                    </Grid>
-                  </Box>
-                );
-              } else {
-                return (
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="body1">
-                      Your {numberOfDays}-day cycling trip is approximately {Math.round(totalDistanceKm)} km in total.
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      We recommend cycling about {Math.round(totalDistanceKm / numberOfDays)} km per day.
-                    </Typography>
-                    
-                    <Grid container spacing={2} sx={{ mt: 1 }}>
-                      {Array.from({ length: numberOfDays }, (_, i) => i + 1).map(day => (
-                        <Grid item xs={6} md={3} key={day}>
-                          <Paper elevation={1} sx={{ p: 2, textAlign: 'center' }}>
-                            <Typography variant="subtitle1">
-                              Day {day}
-                            </Typography>
-                            <Typography variant="h6">
-                              {Math.round(totalDistanceKm / numberOfDays)} km
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              {Math.round((totalDistanceKm / numberOfDays) / 15)} hours
-                            </Typography>
-                          </Paper>
-                        </Grid>
-                      ))}
-                    </Grid>
-                  </Box>
-                );
-              }
-            })()}
-          </Paper>
+        {/* Cycling Plan */}
+        <CyclingPlan 
+          route={route}
+          numberOfDays={formData.numberOfDays}
+          maxDistancePerDay={formData.maxDistancePerDay}
+          tripType={formData.tripType}
+          isMultiDay={formData.isMultiDay}
+        />
+        
+        {/* Points of Interest */}
+        {route.length > 0 && pointsOfInterest.length > 0 && (
+          <PointsOfInterest 
+            pointsOfInterest={pointsOfInterest} 
+            endLocation={formData.endLocation}
+          />
         )}
 
         {loading && (

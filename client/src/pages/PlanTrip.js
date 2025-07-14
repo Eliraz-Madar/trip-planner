@@ -28,6 +28,7 @@ import { planRoute, calculateMinimumDays } from '../services/routeService';
 import { fetchWeatherForecast } from '../services/weatherService';
 import { fetchPointsOfInterest } from '../services/poiService';
 import { saveTrip as saveTripService } from '../services/tripService';
+import { testUnsplashApiKey, getDirectUnsplashImage } from '../services/unsplashService';
 
 // Set up the default marker icon for Leaflet
 L.Marker.prototype.options.icon = L.icon({
@@ -36,6 +37,15 @@ L.Marker.prototype.options.icon = L.icon({
   iconSize: [25, 41],
   iconAnchor: [12, 41]
 });
+
+// Helper function to safely extract environment variables
+const getEnvVar = (key, defaultValue = null) => {
+  const value = process.env[key];
+  if (!value && defaultValue === null) {
+    console.warn(`Environment variable ${key} is not defined`);
+  }
+  return value || defaultValue;
+};
 
 // Helper function to get default image by trip type
 const getDefaultImageByTripType = (type) => {
@@ -49,6 +59,23 @@ const getDefaultImageByTripType = (type) => {
     default:
       return 'https://images.unsplash.com/photo-1500835556837-99ac94a94552';
   }
+};
+
+// Add these helper functions at the top of your file, outside the PlanTrip component
+const extractCity = (locationString) => {
+  if (!locationString) return 'Unknown';
+  
+  // Split by comma and take the first part as the city
+  const parts = locationString.split(',');
+  return parts[0].trim();
+};
+
+const extractCountry = (locationString) => {
+  if (!locationString) return 'Unknown';
+  
+  // Split by comma and take the last part as the country
+  const parts = locationString.split(',');
+  return parts.length > 1 ? parts[parts.length - 1].trim() : 'Unknown';
 };
 
 const PlanTrip = () => {
@@ -80,6 +107,7 @@ const PlanTrip = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [imageUrl, setImageUrl] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
   
   // Handle form input changes
   const handleChange = (e) => {
@@ -96,16 +124,34 @@ const fetchTripImage = async (location, type) => {
     // Show loading state
     setLoading(true);
     
-    // Check if Unsplash API key is configured
-    const unsplashApiKey = process.env.REACT_APP_UNSPLASH_API_KEY;
+    // Check if Unsplash API key is configured - use our helper function
+    const unsplashApiKey = getEnvVar('REACT_APP_UNSPLASH_API_KEY');
     if (!unsplashApiKey) {
-      console.warn('No Unsplash API key found. Please add REACT_APP_UNSPLASH_API_KEY to your .env file.');
+      console.warn('No Unsplash API key found or it could not be accessed. Using default image.');
       // Use default image based on trip type
       const defaultImage = getDefaultImageByTripType(type);
       setImageUrl(defaultImage);
       setFormData(prev => ({ ...prev, imageUrl: defaultImage }));
       return;
     }
+    
+    // Test the API key before proceeding
+    const keyTest = await testUnsplashApiKey(unsplashApiKey);
+    if (!keyTest.success) {
+      console.error('Unsplash API key test failed:', keyTest.error);
+      
+      if (keyTest.statusCode === 401) {
+        console.error('API key is invalid or has been revoked. Please check your Unsplash API key.');
+      }
+      
+      // Use default image if API key doesn't work
+      const defaultImage = getDefaultImageByTripType(type);
+      setImageUrl(defaultImage);
+      setFormData(prev => ({ ...prev, imageUrl: defaultImage }));
+      return;
+    }
+    
+    console.log('Unsplash API key is valid. Proceeding with image search.');
 
     // Function to build optimized search queries
     const buildSearchQueries = (location, type) => {
@@ -166,40 +212,48 @@ const fetchTripImage = async (location, type) => {
     let imageFound = false;
     let newImageUrl = null;
     
+    console.log('Using Unsplash API key:', unsplashApiKey.substring(0, 5) + '...');
+    
     for (const query of searchQueries) {
       if (imageFound) break;
       
       console.log(`Trying to find image with query: "${query}"`);
       
-      // Use Unsplash API to search for relevant images
-      const response = await axios.get(`https://api.unsplash.com/search/photos`, {
-        params: {
-          query: query,
-          per_page: 5, // Get more options to choose from
-          orientation: 'landscape', // Prefer landscape images for trip banners
-          content_filter: 'high', // Try to get high-quality, safe content
-          order_by: 'relevant' // Order by relevance
-        },
-        headers: {
-          'Authorization': `Client-ID ${unsplashApiKey}`
+      try {
+        // Use Unsplash API to search for relevant images
+        const response = await axios.get(`https://api.unsplash.com/search/photos`, {
+          params: {
+            query: query,
+            per_page: 5, // Get more options to choose from
+            orientation: 'landscape', // Prefer landscape images for trip banners
+            content_filter: 'high', // Try to get high-quality, safe content
+            order_by: 'relevant' // Order by relevance
+          },
+          headers: {
+            'Authorization': `Client-ID ${unsplashApiKey}`
+          }
+        });
+        
+        if (response.data.results && response.data.results.length > 0) {
+          // Get a random image from the results to add variety
+          const randomIndex = Math.floor(Math.random() * Math.min(5, response.data.results.length));
+          newImageUrl = response.data.results[randomIndex].urls.regular;
+          
+          // Add credit info to be displayed in the UI
+          const photographerName = response.data.results[randomIndex].user?.name || "Unknown";
+          const photoDescription = response.data.results[randomIndex].description || 
+                                  response.data.results[randomIndex].alt_description || 
+                                  `${type} trip to ${location}`;
+          
+          // Store the query that successfully found an image
+          console.log(`Found image using query: "${query}" by ${photographerName}`);
+          
+          imageFound = true;
         }
-      });
-      
-      if (response.data.results && response.data.results.length > 0) {
-        // Get a random image from the results to add variety
-        const randomIndex = Math.floor(Math.random() * Math.min(5, response.data.results.length));
-        newImageUrl = response.data.results[randomIndex].urls.regular;
-        
-        // Add credit info to be displayed in the UI
-        const photographerName = response.data.results[randomIndex].user?.name || "Unknown";
-        const photoDescription = response.data.results[randomIndex].description || 
-                                response.data.results[randomIndex].alt_description || 
-                                `${type} trip to ${location}`;
-        
-        // Store the query that successfully found an image
-        console.log(`Found image using query: "${query}" by ${photographerName}`);
-        
-        imageFound = true;
+      } catch (queryError) {
+        console.warn(`Error with search query "${query}":`, queryError.message);
+        // Continue to the next query
+        continue;
       }
     }
     
@@ -213,7 +267,27 @@ const fetchTripImage = async (location, type) => {
         imageUrl: newImageUrl
       }));
     } else {
-      // If no image found after all queries, use a default image based on trip type
+      console.log('No images found with standard queries. Trying direct API call as last resort...');
+      
+      // Try one last approach using our direct service with built-in fallback key
+      try {
+        const directResult = await getDirectUnsplashImage(`${type === 'foot-hiking' ? 'hiking' : 
+                                                           type === 'cycling-regular' ? 'cycling' : 'road trip'} ${location}`);
+        
+        if (directResult.success) {
+          console.log(`Found image using direct service by ${directResult.photographer}`);
+          setImageUrl(directResult.imageUrl);
+          setFormData(prev => ({
+            ...prev,
+            imageUrl: directResult.imageUrl
+          }));
+          return;
+        }
+      } catch (directError) {
+        console.warn('Direct image fetch also failed:', directError);
+      }
+      
+      // If all else fails, use a default image
       const defaultImage = getDefaultImageByTripType(type);
       
       setImageUrl(defaultImage);
@@ -262,6 +336,42 @@ const fetchTripImage = async (location, type) => {
       }
     }
   }, [route, formData.tripType, formData.isMultiDay, formData.maxDistancePerDay, formData.numberOfDays]);
+
+  // Ensure pointsOfInterest are properly formatted when loaded
+useEffect(() => {
+  // If we have pointsOfInterest data but it's in string format, parse it
+  if (pointsOfInterest && pointsOfInterest.length > 0) {
+    // Check if any POI is a string instead of an object
+    const needsFormatting = pointsOfInterest.some(poi => typeof poi === 'string' || !poi.id);
+    
+    if (needsFormatting) {
+      try {
+        // Convert string POIs to objects if needed
+        const formattedPOIs = pointsOfInterest.map(poi => {
+          if (typeof poi === 'string') {
+            try {
+              return JSON.parse(poi);
+            } catch (e) {
+              return { 
+                id: `restored_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                name: poi,
+                type: 'Unknown',
+                location: [0, 0], // Default coordinates
+                description: '',
+                isDestination: false
+              };
+            }
+          }
+          return poi;
+        });
+        
+        setPointsOfInterest(formattedPOIs);
+      } catch (error) {
+        console.error('Error formatting points of interest:', error);
+      }
+    }
+  }
+}, [pointsOfInterest]);
 
   // Handle form submission
   const handleSubmit = async (e) => {
@@ -322,52 +432,133 @@ const fetchTripImage = async (location, type) => {
 
   // Save trip to database
   const handleSaveTrip = async () => {
+    if (!user) {
+      navigate('/login');
+      return;
+    }
+
     try {
-      // Import the function at the top of the file if you haven't already
-      // import { formatTripDataForSaving } from '../services/tripService';
-      
-      // Use formData properties instead of direct variables
+      setIsSaving(true);
+      setError('');
+
+      // Calculate total distance from route
+      const totalDistance = route.reduce((total, coord, i) => {
+        if (i === 0) return 0;
+        // Calculate distance between this point and the previous point
+        const prevCoord = route[i - 1];
+        const distance = L.latLng(prevCoord[0], prevCoord[1])
+          .distanceTo(L.latLng(coord[0], coord[1])) / 1000; // Convert to km
+        return total + distance;
+      }, 0);
+
+      // Calculate daily distances for multi-day trips
+      const dailyDistances = [];
+      if (formData.isMultiDay && formData.numberOfDays > 1) {
+        const distancePerDay = totalDistance / formData.numberOfDays;
+        for (let i = 1; i <= formData.numberOfDays; i++) {
+          dailyDistances.push({
+            day: i,
+            distance: Math.round(distancePerDay * 10) / 10
+          });
+        }
+      } else {
+        dailyDistances.push({
+          day: 1,
+          distance: Math.round(totalDistance * 10) / 10
+        });
+      }
+
+      // Create a name for the trip
+      const tripName = `${formData.tripType === 'foot-hiking' ? 'Hiking' : 
+                      formData.tripType === 'cycling-regular' ? 'Cycling' : 'Driving'} ${
+                      formData.isCircular ? 'Loop around' : 'Trip from'} ${formData.startLocation}${
+                      !formData.isCircular ? ` to ${formData.endLocation}` : ''}`;
+
+      // Make sure POIs have the correct structure for MongoDB
+const formattedPOIs = pointsOfInterest.map(poi => {
+  // Ensure each POI has the proper format
+  return {
+    id: poi.id || `poi_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+    name: poi.name || 'Unnamed Location',
+    type: poi.type || 'Unknown',
+    location: Array.isArray(poi.location) && poi.location.length === 2 ? 
+      poi.location : [0, 0],
+    description: typeof poi.description === 'string' ? poi.description : '',
+    isDestination: !!poi.isDestination
+  };
+});
+
+      // Prepare trip data with FULL POI objects
       const tripData = {
-        name: `${formData.tripType === 'foot-hiking' ? 'Hiking' : 
-               formData.tripType === 'cycling-regular' ? 'Cycling' : 'Driving'} Trip from ${formData.startLocation} to ${formData.endLocation}`,
+        name: tripName,
+        description: `A ${formData.tripType.replace(/-/g, ' ')} trip ${formData.isCircular ? 'around' : 'from'} ${formData.startLocation}${!formData.isCircular ? ` to ${formData.endLocation}` : ''} . Total distance: ${totalDistance.toFixed(1)} km.`,
         type: formData.tripType,
-        startLocation: { 
-          coordinates: [route[0][1], route[0][0]],
-          city: formData.startLocation, 
-          country: 'Country' 
+        startLocation: {
+          type: 'Point',
+          coordinates: [route[0][1], route[0][0]],  // [longitude, latitude]
+          city: extractCity(formData.startLocation),
+          country: extractCountry(formData.startLocation)
         },
-        endLocation: { 
+        endLocation: {
+          type: 'Point',
           coordinates: [route[route.length - 1][1], route[route.length - 1][0]],
-          city: formData.endLocation, 
-          country: 'Country' 
+          city: formData.isCircular ? extractCity(formData.startLocation) : extractCity(formData.endLocation),
+          country: formData.isCircular ? extractCountry(formData.startLocation) : extractCountry(formData.endLocation)
         },
-        route: { 
-          coordinates: route.map(coord => [coord[1], coord[0]])
+        route: {
+          type: 'LineString',
+          coordinates: route.map(coord => [coord[1], coord[0]])  // Convert to [longitude, latitude]
         },
-        dailyDistances: calculateDailyDistances(route, formData.tripType, formData.numberOfDays, formData.isMultiDay, formData.maxDistancePerDay),
-        totalDistance: calculateTotalDistance(route),
-        isMultiDay: formData.tripType === 'cycling-regular' ? formData.isMultiDay : false,
-        maxDistancePerDay: formData.tripType === 'cycling-regular' ? formData.maxDistancePerDay : 0,
-        numberOfDays: formData.tripType === 'cycling-regular' && formData.isMultiDay ? formData.numberOfDays : 1,
+        // Important: Include ALL POI data
+        pointsOfInterest: formattedPOIs,
+        totalDistance: totalDistance,
+        isCircular: formData.isCircular,
+        isMultiDay: formData.isMultiDay,
+        maxDistancePerDay: formData.maxDistancePerDay,
+        numberOfDays: formData.isMultiDay ? formData.numberOfDays : 1,
+        dailyDistances: dailyDistances,
         startDate: new Date(),
-        endDate: new Date(Date.now() + (formData.numberOfDays || 1) * 24 * 60 * 60 * 1000),
-        pointsOfInterest: pointsOfInterest,
-        imageUrl: imageUrl
+        endDate: new Date(Date.now() + (formData.numberOfDays * 24 * 60 * 60 * 1000)),
+        imageUrl: imageUrl || getDefaultImageByTripType(formData.tripType)
       };
 
-      console.log('Sending trip data:', tripData);
-      
-      // Use the saveTripService function imported at the top
+      // Save the trip
       await saveTripService(tripData, localStorage.getItem('token'));
       navigate('/trips');
     } catch (err) {
       console.error('Error saving trip:', err);
-      if (err.response) {
-        console.error('Server error details:', err.response.data);
-      }
-      setError('Failed to save trip: ' + (err.response?.data?.message || 'Server error'));
+      setError(err.message || 'Failed to save trip');
+    } finally {
+      setIsSaving(false);
     }
   };
+
+  // Helper functions to extract city and country from a location string
+const extractCityFromLocation = (location) => {
+  if (!location) return 'Unknown';
+  
+  // Clean the location string
+  const cleanLocation = location.replace(/[0-9]/g, '').trim();
+  
+  // Try to split by comma to separate city and country
+  const parts = cleanLocation.split(',').map(part => part.trim());
+  
+  // If we have at least one part, use the first as the city
+  return parts[0] || 'Unknown';
+};
+
+const extractCountryFromLocation = (location) => {
+  if (!location) return 'Unknown';
+  
+  // Clean the location string
+  const cleanLocation = location.replace(/[0-9]/g, '').trim();
+  
+  // Try to split by comma to separate city and country
+  const parts = cleanLocation.split(',').map(part => part.trim());
+  
+  // If we have more than one part, use the last as the country
+  return parts.length > 1 ? parts[parts.length - 1] : 'Unknown';
+};
 
   // Add these helper functions at an appropriate place in your file
   const calculateTotalDistance = (route) => {
@@ -479,3 +670,4 @@ const fetchTripImage = async (location, type) => {
 };
 
 export default PlanTrip;
+

@@ -14,7 +14,10 @@ import {
   DialogActions,
   Alert,
   Paper,
-  CardMedia
+  CardMedia,
+  List,
+  ListItem,
+  ListItemText
 } from '@mui/material';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -60,6 +63,7 @@ const MyTrips = () => {
     }
   };
 
+  // 1. First, fix the handleTripClick function to properly extract trip data
   const handleTripClick = async (trip) => {
     console.log("Trip clicked:", trip);
     console.log("Route data:", trip.route);
@@ -73,9 +77,17 @@ const MyTrips = () => {
         }
       });
       console.log("Trip details response:", response.data);
-      console.log("Updated route data:", response.data.trip.route);
-      setSelectedTrip(response.data.trip); // Use the updated trip data from the response
-      setWeather(response.data.weather);
+      
+      // Fix: Check the response structure and use the correct path
+      const tripData = response.data.trip || response.data;
+      console.log("Trip data to use:", tripData);
+      
+      setSelectedTrip(tripData);
+      
+      // Set weather if it's available in the response
+      if (response.data.weather) {
+        setWeather(response.data.weather);
+      }
     } catch (err) {
       console.error("Error fetching trip details:", err);
       setError('Failed to fetch trip details');
@@ -106,17 +118,136 @@ const MyTrips = () => {
     }
   };
 
-  const MapViewController = ({ startCoords, endCoords }) => {
-    const map = useMap();
+ const MapViewController = ({ startCoords, endCoords, route }) => {
+  const map = useMap();
+  
+  React.useEffect(() => {
+    if (route && route.length > 1) {
+      // Create a bounds object from all route points
+      const bounds = L.latLngBounds(route);
+      map.fitBounds(bounds, { padding: [50, 50] });
+    } else if (startCoords && endCoords) {
+      // Fallback to just the start and end points
+      const bounds = L.latLngBounds([startCoords, endCoords]);
+      map.fitBounds(bounds, { padding: [50, 50] });
+    }
+  }, [map, startCoords, endCoords, route]);
+  
+  return null;
+};
+
+  // Update the renderPointsOfInterest function to better handle different POI formats
+  const renderPointsOfInterest = (trip) => {
+    if (!trip || !trip.pointsOfInterest || trip.pointsOfInterest.length === 0) {
+      return (
+        <Typography variant="body2" color="text.secondary">
+          No points of interest saved for this trip.
+        </Typography>
+      );
+    }
+
+    // Log POI data to help debug
+    console.log("POI data:", trip.pointsOfInterest);
+
+    // Check if POIs are strings (IDs) or objects
+    const firstPoi = trip.pointsOfInterest[0];
+    const arePoiStrings = typeof firstPoi === 'string';
+    const arePoiObjects = typeof firstPoi === 'object' && firstPoi !== null;
     
-    React.useEffect(() => {
-      if (startCoords && endCoords) {
-        const bounds = L.latLngBounds([startCoords, endCoords]);
-        map.fitBounds(bounds, { padding: [50, 50] });
-      }
-    }, [map, startCoords, endCoords]);
+    if (arePoiStrings) {
+      return (
+        <Typography variant="body2">
+          This trip has {trip.pointsOfInterest.length} points of interest saved.
+          View them on the interactive map by planning this trip again.
+        </Typography>
+      );
+    }
     
-    return null;
+    if (!arePoiObjects || !firstPoi.location) {
+      return (
+        <Typography variant="body2" color="text.secondary">
+          Points of interest data is incomplete. Try planning this trip again.
+        </Typography>
+      );
+    }
+
+    // If we have full POI objects, continue with the existing code...
+    const routePOIs = trip.pointsOfInterest.filter(poi => !poi.isDestination);
+    const destinationPOIs = trip.pointsOfInterest.filter(poi => poi.isDestination);
+
+    return (
+      <Grid container spacing={2}>
+        {routePOIs.length > 0 && (
+          <Grid item xs={12} md={6}>
+            <Typography variant="subtitle2" gutterBottom>
+              Along Your Route:
+            </Typography>
+            
+            {/* Group route POIs by type */}
+            {Object.entries(
+              routePOIs.reduce((categories, poi) => {
+                const category = poi.type.charAt(0).toUpperCase() + poi.type.slice(1).replace(/_/g, ' ');
+                if (!categories[category]) {
+                  categories[category] = [];
+                }
+                categories[category].push(poi);
+                return categories;
+              }, {})
+            ).map(([category, pois]) => (
+              <Box key={category} sx={{ mb: 2 }}>
+                <Typography variant="body1" fontWeight="bold" color="primary.main">
+                  {category}
+                </Typography>
+                <Box component="ul" sx={{ pl: 2, mt: 0.5 }}>
+                  {pois.map(poi => (
+                    <Box component="li" key={poi.id}>
+                      <Typography variant="body2">
+                        {poi.name}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            ))}
+          </Grid>
+        )}
+        
+        {destinationPOIs.length > 0 && (
+          <Grid item xs={12} md={6}>
+            <Typography variant="subtitle2" gutterBottom>
+              At Your Destination:
+            </Typography>
+            
+            {/* Group destination POIs by type */}
+            {Object.entries(
+              destinationPOIs.reduce((categories, poi) => {
+                const category = poi.type.charAt(0).toUpperCase() + poi.type.slice(1).replace(/_/g, ' ');
+                if (!categories[category]) {
+                  categories[category] = [];
+                }
+                categories[category].push(poi);
+                return categories;
+              }, {})
+            ).map(([category, pois]) => (
+              <Box key={category} sx={{ mb: 2 }}>
+                <Typography variant="body1" fontWeight="bold" color="primary.main">
+                  {category}
+                </Typography>
+                <Box component="ul" sx={{ pl: 2, mt: 0.5 }}>
+                  {pois.map(poi => (
+                    <Box component="li" key={poi.id}>
+                      <Typography variant="body2">
+                        {poi.name}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            ))}
+          </Grid>
+        )}
+      </Grid>
+    );
   };
 
   if (loading) {
@@ -264,14 +395,14 @@ const MyTrips = () => {
                         <strong>End:</strong> {selectedTrip.endLocation.city}
                       </Popup>
                     </Marker>
-                    
+
+                    {/* Fixed route polyline rendering */}
                     {selectedTrip.route && 
                      selectedTrip.route.coordinates && 
-                     selectedTrip.route.coordinates.length > 0 && 
-                     selectedTrip.route.coordinates[0] && (
+                     selectedTrip.route.coordinates.length > 0 && (
                       <Polyline
                         positions={selectedTrip.route.coordinates.map(coord => 
-                          // Convert each point from [lng, lat] to [lat, lng]
+                          // Convert from [lng, lat] to [lat, lng]
                           [coord[1], coord[0]]
                         )}
                         color="blue"
@@ -280,14 +411,14 @@ const MyTrips = () => {
                       />
                     )}
 
-                    {/* Driving specific points of interest markers */}
-                    {selectedTrip.type === 'driving-car' && 
-                     selectedTrip.pointsOfInterest && 
+                    {/* POI markers - only render if POIs are objects with location */}
+                    {selectedTrip.pointsOfInterest && 
                      selectedTrip.pointsOfInterest.length > 0 && 
+                     typeof selectedTrip.pointsOfInterest[0] !== 'string' && // Only if not strings
                      selectedTrip.pointsOfInterest.map(poi => (
                       <Marker 
                         key={poi.id} 
-                        position={poi.location}
+                        position={[poi.location[0], poi.location[1]]}
                         icon={L.divIcon({
                           className: 'custom-poi-icon',
                           html: `<div style="background-color: ${poi.isDestination ? '#ff4500' : '#4caf50'}; width: 10px; height: 10px; border-radius: 50%; border: 2px solid white;"></div>`,
@@ -304,9 +435,11 @@ const MyTrips = () => {
                       </Marker>
                     ))}
 
+                    {/* Add this to ensure the map shows the whole route */}
                     <MapViewController 
                       startCoords={[selectedTrip.startLocation.coordinates[1], selectedTrip.startLocation.coordinates[0]]} 
                       endCoords={[selectedTrip.endLocation.coordinates[1], selectedTrip.endLocation.coordinates[0]]}
+                      route={selectedTrip.route?.coordinates?.map(coord => [coord[1], coord[0]])}
                     />
                   </MapContainer>
                 </Box>
@@ -506,128 +639,19 @@ const MyTrips = () => {
                     Local Information
                   </Typography>
                   <Typography variant="body2" paragraph>
-                    Your trip begins in {selectedTrip.startLocation.city} and ends in {selectedTrip.endLocation.city}.
+                    Your trip begins in {selectedTrip.startLocation.city} and {
+                      selectedTrip.isCircular 
+                        ? 'loops back to the same location'
+                        : `ends in ${selectedTrip.endLocation.city}`
+                    }.
                     Remember to check local regulations and restrictions before your journey.
                   </Typography>
                   
-                  {selectedTrip.type === 'driving-car' && selectedTrip.pointsOfInterest && selectedTrip.pointsOfInterest.length > 0 ? (
-                    <>
-                      <Typography variant="subtitle1" gutterBottom>
-                        Points of Interest:
-                      </Typography>
-                      
-                      <Grid container spacing={2}>
-                        <Grid item xs={12} md={6}>
-                          <Typography variant="subtitle2" gutterBottom>
-                            Along Your Route:
-                          </Typography>
-                          
-                          {/* Group route POIs by type */}
-                          {Object.entries(
-                            selectedTrip.pointsOfInterest
-                              .filter(poi => !poi.isDestination)
-                              .reduce((categories, poi) => {
-                                const category = poi.type.charAt(0).toUpperCase() + poi.type.slice(1).replace(/_/g, ' ');
-                                if (!categories[category]) {
-                                  categories[category] = [];
-                                }
-                                categories[category].push(poi);
-                                return categories;
-                              }, {})
-                          ).map(([category, pois]) => (
-                            <Box key={category} sx={{ mb: 2 }}>
-                              <Typography variant="body1" fontWeight="bold" color="primary.main">
-                                {category}
-                              </Typography>
-                              <Box component="ul" sx={{ pl: 2, mt: 0.5 }}>
-                                {pois.map(poi => (
-                                  <Box component="li" key={poi.id}>
-                                    <Typography variant="body2">
-                                      <Box 
-                                        component="a"
-                                        href={`https://www.google.com/search?q=${encodeURIComponent(poi.name + ' ' + selectedTrip.endLocation.city)}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        sx={{ 
-                                          color: 'primary.main',
-                                          textDecoration: 'none',
-                                          '&:hover': { 
-                                            textDecoration: 'underline',
-                                            fontWeight: 'medium'
-                                          }
-                                        }}
-                                      >
-                                        {poi.name}
-                                      </Box>
-                                    </Typography>
-                                  </Box>
-                                ))}
-                              </Box>
-                            </Box>
-                          ))}
-                        </Grid>
-                        
-                        <Grid item xs={12} md={6}>
-                          <Typography variant="subtitle2" gutterBottom>
-                            At Your Destination:
-                          </Typography>
-                          
-                          {/* Group destination POIs by type */}
-                          {Object.entries(
-                            selectedTrip.pointsOfInterest
-                              .filter(poi => poi.isDestination)
-                              .reduce((categories, poi) => {
-                                const category = poi.type.charAt(0).toUpperCase() + poi.type.slice(1).replace(/_/g, ' ');
-                                if (!categories[category]) {
-                                  categories[category] = [];
-                                }
-                                categories[category].push(poi);
-                                return categories;
-                              }, {})
-                          ).map(([category, pois]) => (
-                            <Box key={category} sx={{ mb: 2 }}>
-                              <Typography variant="body1" fontWeight="bold" color="primary.main">
-                                {category}
-                              </Typography>
-                              <Box component="ul" sx={{ pl: 2, mt: 0.5 }}>
-                                {pois.map(poi => (
-                                  <Box component="li" key={poi.id}>
-                                    <Typography variant="body2">
-                                      <Box 
-                                        component="a"
-                                        href={`https://www.google.com/search?q=${encodeURIComponent(poi.name + ' ' + selectedTrip.endLocation.city)}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        sx={{ 
-                                          color: 'primary.main',
-                                          textDecoration: 'none',
-                                          '&:hover': { 
-                                            textDecoration: 'underline',
-                                            fontWeight: 'medium'
-                                          }
-                                        }}
-                                      >
-                                        {poi.name}
-                                      </Box>
-                                    </Typography>
-                                  </Box>
-                                ))}
-                              </Box>
-                            </Box>
-                          ))}
-                        </Grid>
-                      </Grid>
-                    </>
-                  ) : (
-                    <>
-                      <Typography variant="subtitle1" gutterBottom>
-                        Points of Interest Near Route:
-                      </Typography>
-                      <Typography variant="body2">
-                        • Loading nearby attractions...
-                      </Typography>
-                    </>
-                  )}
+                  {/* Points of Interest display */}
+                  <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+                    Points of Interest
+                  </Typography>
+                  {renderPointsOfInterest(selectedTrip)}
                 </Paper>
               </DialogContent>
               <DialogActions>

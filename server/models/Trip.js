@@ -20,6 +20,18 @@ const tripSchema = new mongoose.Schema({
     enum: ['hiking', 'bicycling', 'driving', 'foot-hiking', 'cycling-regular', 'driving-car'], // Add the ORS types
     required: true
   },
+  isMultiDay: {
+    type: Boolean,
+    default: false
+  },
+  maxDistancePerDay: {
+    type: Number,
+    default: 0
+  },
+  numberOfDays: {
+    type: Number,
+    default: 1
+  },
   startLocation: {
     type: {
       type: String,
@@ -77,6 +89,10 @@ const tripSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  isCircular: {
+    type: Boolean,
+    default: false
+  },
   startDate: {
     type: Date,
     required: true
@@ -94,15 +110,36 @@ const tripSchema = new mongoose.Schema({
     default: null
   },
   pointsOfInterest: [{
-    id: String,
-    name: String,
-    type: String,
-    location: {
-      type: [Number],
-      index: '2dsphere'
+    id: {
+      type: String,
+      required: true
     },
-    description: String,
-    isDestination: Boolean
+    name: {
+      type: String,
+      required: true
+    },
+    type: {
+      type: String,
+      required: true
+    },
+    location: {
+      type: [Number],  // [lat, lng]
+      required: true,
+      validate: {
+        validator: function(v) {
+          return Array.isArray(v) && v.length === 2;
+        },
+        message: 'Location must be an array of two numbers [latitude, longitude]'
+      }
+    },
+    description: {
+      type: String,
+      default: ''
+    },
+    isDestination: {
+      type: Boolean,
+      default: false
+    }
   }]
 }, {
   timestamps: true

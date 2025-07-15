@@ -17,6 +17,8 @@ export const fetchPointsOfInterest = async (route, tripType) => {
     const routePoints = getRouteCheckpoints(route, 3); // Get 3 points along the route
     
     let allPOIs = [];
+    // To track and deduplicate POIs
+    const poiNameLocationMap = new Map();
     
     // Build query based on trip type
     let queryElements = '';
@@ -84,7 +86,7 @@ export const fetchPointsOfInterest = async (route, tripType) => {
       if (response.data && response.data.elements) {
         const pointPOIs = response.data.elements
           .filter(poi => poi.tags && (poi.tags.name || poi.tags.tourism || poi.tags.natural || poi.tags.historic))
-          .map(poi => {
+          .map((poi, index) => {
             // Determine the best category name based on trip type
             let type = 'Attraction';
             
@@ -123,8 +125,11 @@ export const fetchPointsOfInterest = async (route, tripType) => {
               else if (poi.tags.leisure === 'park') type = 'Park';
             }
             
+            // Create a unique ID by combining the POI ID with its index and a timestamp prefix
+            const uniqueId = `r_${Date.now()}_${poi.id}_${index}`;
+            
             return {
-              id: poi.id,
+              id: uniqueId,
               name: poi.tags.name || 'Unnamed Attraction',
               type: type,
               location: [poi.lat, poi.lon],
@@ -133,12 +138,19 @@ export const fetchPointsOfInterest = async (route, tripType) => {
           })
           .slice(0, 4); // Take top 4 from each checkpoint
           
-        allPOIs = [...allPOIs, ...pointPOIs];
+        // Deduplicate POIs based on name and approximate location
+        pointPOIs.forEach(poi => {
+          const nameLocationKey = `${poi.name}-${poi.location[0].toFixed(3)}-${poi.location[1].toFixed(3)}`;
+          if (!poiNameLocationMap.has(nameLocationKey)) {
+            poiNameLocationMap.set(nameLocationKey, poi);
+            allPOIs.push(poi);
+          }
+        });
       }
     }
     
     // Add destination POIs with appropriate queries for each trip type
-    await fetchDestinationPOIs(route, tripType, allPOIs);
+    await fetchDestinationPOIsWithDeduplication(route, tripType, allPOIs, poiNameLocationMap);
     
     return allPOIs;
   } catch (error) {
@@ -148,13 +160,14 @@ export const fetchPointsOfInterest = async (route, tripType) => {
 };
 
 /**
- * Fetches points of interest at the destination
+ * Fetches points of interest at the destination with deduplication
  * @param {Array} route - Route coordinates
  * @param {string} tripType - Type of trip
  * @param {Array} allPOIs - Array to add POIs to
+ * @param {Map} poiNameLocationMap - Map to track POIs for deduplication
  * @returns {Promise<void>}
  */
-export const fetchDestinationPOIs = async (route, tripType, allPOIs) => {
+export const fetchDestinationPOIsWithDeduplication = async (route, tripType, allPOIs, poiNameLocationMap) => {
   try {
     // Common query elements for all trip types
     const commonQuery = `
@@ -207,7 +220,7 @@ export const fetchDestinationPOIs = async (route, tripType, allPOIs) => {
     if (destResponse.data && destResponse.data.elements) {
       const destPOIs = destResponse.data.elements
         .filter(poi => poi.tags && poi.tags.name)
-        .map(poi => {
+        .map((poi, index) => {
           // Determine the best category name based on trip type
           let type = 'Attraction';
           
@@ -238,8 +251,11 @@ export const fetchDestinationPOIs = async (route, tripType, allPOIs) => {
             else if (poi.tags.amenity === 'hotel') type = 'Hotel';
           }
           
+          // Create a unique ID by combining the POI ID with its index and a timestamp prefix
+          const uniqueId = `d_${Date.now()}_${poi.id}_${index}`;
+          
           return {
-            id: poi.id,
+            id: uniqueId,
             name: poi.tags.name,
             type: type,
             location: [poi.lat, poi.lon],
@@ -248,8 +264,15 @@ export const fetchDestinationPOIs = async (route, tripType, allPOIs) => {
           };
         })
         .slice(0, 5); // Take top 5 from destination
-        
-      allPOIs.push(...destPOIs);
+      
+      // Deduplicate POIs based on name and approximate location
+      destPOIs.forEach(poi => {
+        const nameLocationKey = `${poi.name}-${poi.location[0].toFixed(3)}-${poi.location[1].toFixed(3)}`;
+        if (!poiNameLocationMap.has(nameLocationKey)) {
+          poiNameLocationMap.set(nameLocationKey, poi);
+          allPOIs.push(poi);
+        }
+      });
     }
   } catch (error) {
     console.error("Error fetching destination POIs:", error);

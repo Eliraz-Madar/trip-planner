@@ -54,7 +54,7 @@ personal-trip-planner/
 1. Clone the repository:
 ```bash
 git clone https://github.com/Eliraz-Madar/trip-planner.git
-cd personal-trip-planner
+cd trip-planner
 ```
 
 2. Install backend dependencies:
@@ -71,14 +71,18 @@ npm install
 
 4. Create a `.env` file in the server directory with the following variables:
 ```
+PORT=5000
 MONGODB_URI=your_mongodb_uri
 JWT_SECRET=your_jwt_secret
-WEATHER_API_KEY=your_openweathermap_api_key
-PORT=5000
+OPENWEATHERMAP_API_KEY=your_openweathermap_api_key
+REACT_APP_ORS_API_KEY=your_ORS_api_key
+REACT_APP_UNSPLASH_API_KEY=your_unsplash_api_key
 ```
 
 5. Create a `.env` file in the client directory with the following variables:
 ```
+REACT_APP_ORS_API_KEY=your_ORS_api_key
+REACT_APP_WEATHER_API_KEY=your_weather_api_key
 REACT_APP_UNSPLASH_API_KEY=your_unsplash_api_key
 ```
 To get an Unsplash API key:
@@ -91,13 +95,13 @@ To get an Unsplash API key:
 
 Backend:
 ```bash
-cd server
+cd path_to_server
 npm run dev
 ```
 
 Frontend:
 ```bash
-cd client
+cd path_to_client
 npm start
 ```
 

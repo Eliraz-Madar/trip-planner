@@ -93,13 +93,13 @@ To get an Unsplash API key:
 
 6. Start the development servers:
 
-Backend:
+First start with the Backend:
 ```bash
 cd path_to_server
 npm run dev
 ```
 
-Frontend:
+Then Frontend:
 ```bash
 cd path_to_client
 npm start

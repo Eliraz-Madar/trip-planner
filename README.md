@@ -53,7 +53,7 @@ personal-trip-planner/
 
 1. Clone the repository:
 ```bash
-git clone [repository-url]
+git clone https://github.com/Eliraz-Madar/trip-planner.git
 cd personal-trip-planner
 ```
 

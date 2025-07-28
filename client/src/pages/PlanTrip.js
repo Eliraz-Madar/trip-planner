@@ -6,7 +6,9 @@ import {
   Typography,
   Box,
   Grid,
-  CircularProgress
+  CircularProgress,
+  Snackbar,
+  Alert
 } from '@mui/material';
 import L from 'leaflet';
 import axios from 'axios';
@@ -61,11 +63,9 @@ const getDefaultImageByTripType = (type) => {
   }
 };
 
-// Add these helper functions at the top of your file, outside the PlanTrip component
 const extractCity = (locationString) => {
   if (!locationString) return 'Unknown';
   
-  // Split by comma and take the first part as the city
   const parts = locationString.split(',');
   return parts[0].trim();
 };
@@ -73,7 +73,6 @@ const extractCity = (locationString) => {
 const extractCountry = (locationString) => {
   if (!locationString) return 'Unknown';
   
-  // Split by comma and take the last part as the country
   const parts = locationString.split(',');
   return parts.length > 1 ? parts[parts.length - 1].trim() : 'Unknown';
 };
@@ -108,6 +107,14 @@ const PlanTrip = () => {
   const [loading, setLoading] = useState(false);
   const [imageUrl, setImageUrl] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [dailyDistancesForDisplay, setDailyDistancesForDisplay] = useState([]);
+  const [adjustmentNotification, setAdjustmentNotification] = useState({
+    open: false,
+    message: '',
+    originalDays: 0,
+    adjustedDays: 0,
+    totalDistance: 0
+  });
   
   // Handle form input changes
   const handleChange = (e) => {
@@ -313,27 +320,50 @@ const fetchTripImage = async (location, type) => {
   }
 };
 
-  // Adjust days if needed when route changes
+  // Calculate daily distances for display when route changes
   useEffect(() => {
-    if (route.length > 0 && formData.tripType === 'cycling-regular' && formData.isMultiDay) {
-      // Calculate total distance
-      let totalDistanceKm = 0;
-      for (let i = 1; i < route.length; i++) {
-        const p1 = L.latLng(route[i-1][0], route[i-1][1]);
-        const p2 = L.latLng(route[i][0], route[i][1]);
-        totalDistanceKm += p1.distanceTo(p2) / 1000;
+    if (route.length > 0) {
+      // For cycling trips, check if we need to adjust days based on distance constraints
+      // Apply this regardless of single day or multi-day selection
+      if (formData.tripType === 'cycling-regular') {
+        const totalDistance = calculateTotalDistance(route);
+        const minDaysNeeded = Math.max(1, Math.ceil(totalDistance / formData.maxDistancePerDay));
+        
+        // Update days if below minimum required
+        if (minDaysNeeded > formData.numberOfDays) {
+          const originalDays = formData.numberOfDays;
+          const originalWasSingleDay = !formData.isMultiDay;
+          
+          setFormData(prev => ({
+            ...prev,
+            numberOfDays: minDaysNeeded,
+            isMultiDay: minDaysNeeded > 1 // Automatically set to multi-day if more than 1 day needed
+          }));
+          
+          // Show notification about the adjustment
+          setAdjustmentNotification({
+            open: true,
+            message: `Trip duration adjusted from ${originalDays} day${originalDays > 1 ? 's' : ''} to ${minDaysNeeded} days`,
+            originalDays: originalDays,
+            adjustedDays: minDaysNeeded,
+            totalDistance: totalDistance,
+            originalWasSingleDay: originalWasSingleDay
+          });
+        }
       }
       
-      // Calculate minimum days
-      const minDaysNeeded = Math.max(1, Math.ceil(totalDistanceKm / formData.maxDistancePerDay));
+      // Calculate daily distances for display for all trip types
+      const dailyDistancesResult = calculateDailyDistances(
+        route, 
+        formData.tripType, 
+        formData.numberOfDays,
+        formData.isMultiDay, 
+        formData.maxDistancePerDay
+      );
       
-      // Update days if below minimum
-      if (minDaysNeeded > formData.numberOfDays) {
-        setFormData(prev => ({
-          ...prev,
-          numberOfDays: minDaysNeeded
-        }));
-      }
+      setDailyDistancesForDisplay(dailyDistancesResult);
+    } else {
+      setDailyDistancesForDisplay([]);
     }
   }, [route, formData.tripType, formData.isMultiDay, formData.maxDistancePerDay, formData.numberOfDays]);
 
@@ -394,6 +424,43 @@ useEffect(() => {
       
       setRoute(routeResult.coordinates);
       
+      // For cycling trips, immediately check and adjust days based on distance constraints
+      if (formData.tripType === 'cycling-regular') {
+        // Calculate total distance of the planned route
+        let totalDistanceKm = 0;
+        if (routeResult.coordinates.length > 1) {
+          for (let i = 1; i < routeResult.coordinates.length; i++) {
+            const p1 = L.latLng(routeResult.coordinates[i-1][0], routeResult.coordinates[i-1][1]);
+            const p2 = L.latLng(routeResult.coordinates[i][0], routeResult.coordinates[i][1]);
+            totalDistanceKm += p1.distanceTo(p2) / 1000;
+          }
+        }
+        
+        const minDaysNeeded = Math.max(1, Math.ceil(totalDistanceKm / formData.maxDistancePerDay));
+        
+        // Update form data if needed
+        if (minDaysNeeded > formData.numberOfDays) {
+          const originalDays = formData.numberOfDays;
+          const originalWasSingleDay = !formData.isMultiDay;
+          
+          setFormData(prev => ({
+            ...prev,
+            numberOfDays: minDaysNeeded,
+            isMultiDay: minDaysNeeded > 1
+          }));
+          
+          // Show notification about the adjustment
+          setAdjustmentNotification({
+            open: true,
+            message: `Trip duration adjusted from ${originalDays} day${originalDays > 1 ? 's' : ''} to ${minDaysNeeded} days`,
+            originalDays: originalDays,
+            adjustedDays: minDaysNeeded,
+            totalDistance: Math.round(totalDistanceKm * 10) / 10,
+            originalWasSingleDay: originalWasSingleDay
+          });
+        }
+      }
+      
       // Fetch points of interest
       const pois = await fetchPointsOfInterest(routeResult.coordinates, formData.tripType);
       setPointsOfInterest(pois);
@@ -441,32 +508,33 @@ useEffect(() => {
       setIsSaving(true);
       setError('');
 
-      // Calculate total distance from route
-      const totalDistance = route.reduce((total, coord, i) => {
-        if (i === 0) return 0;
-        // Calculate distance between this point and the previous point
-        const prevCoord = route[i - 1];
-        const distance = L.latLng(prevCoord[0], prevCoord[1])
-          .distanceTo(L.latLng(coord[0], coord[1])) / 1000; // Convert to km
-        return total + distance;
-      }, 0);
-
-      // Calculate daily distances for multi-day trips
-      const dailyDistances = [];
-      if (formData.isMultiDay && formData.numberOfDays > 1) {
-        const distancePerDay = totalDistance / formData.numberOfDays;
-        for (let i = 1; i <= formData.numberOfDays; i++) {
-          dailyDistances.push({
-            day: i,
-            distance: Math.round(distancePerDay * 10) / 10
-          });
-        }
-      } else {
-        dailyDistances.push({
-          day: 1,
-          distance: Math.round(totalDistance * 10) / 10
-        });
+      // Calculate total distance and daily distances using helper functions
+      const totalDistance = calculateTotalDistance(route);
+      
+      // For cycling trips, ALWAYS recalculate the minimum days needed to ensure consistency
+      let finalNumberOfDays = formData.numberOfDays;
+      let finalIsMultiDay = formData.isMultiDay;
+      
+      if (formData.tripType === 'cycling-regular') {
+        const minDaysNeeded = Math.max(1, Math.ceil(totalDistance / formData.maxDistancePerDay));
+        finalNumberOfDays = Math.max(formData.numberOfDays, minDaysNeeded);
+        finalIsMultiDay = finalNumberOfDays > 1;
       }
+      
+      const dailyDistancesResult = calculateDailyDistances(
+        route, 
+        formData.tripType, 
+        finalNumberOfDays, 
+        finalIsMultiDay, 
+        formData.maxDistancePerDay
+      );
+
+      // Use the actual number of days from the calculation (which respects user choice + constraints)
+      const actualNumberOfDays = dailyDistancesResult.length;
+      
+      // Check if this trip was adjusted from the original user selection
+      const wasAdjusted = adjustmentNotification.originalDays > 0 && 
+                         adjustmentNotification.originalDays !== actualNumberOfDays;
 
       // Create a name for the trip
       const tripName = `${formData.tripType === 'foot-hiking' ? 'Hiking' : 
@@ -474,24 +542,33 @@ useEffect(() => {
                       formData.isCircular ? 'Loop around' : 'Trip from'} ${formData.startLocation}${
                       !formData.isCircular ? ` to ${formData.endLocation}` : ''}`;
 
+      // Create trip description including adjustment info if applicable
+      let tripDescription = `A ${formData.tripType.replace(/-/g, ' ')} trip ${formData.isCircular ? 'around' : 'from'} ${formData.startLocation}${!formData.isCircular ? ` to ${formData.endLocation}` : ''} . Total distance: ${totalDistance.toFixed(1)} km over ${actualNumberOfDays} day${actualNumberOfDays > 1 ? 's' : ''}.`;
+      
+      if (wasAdjusted) {
+        tripDescription += ` Originally planned for ${adjustmentNotification.originalDays} day${adjustmentNotification.originalDays > 1 ? 's' : ''}, adjusted to ${actualNumberOfDays} days for cycling safety (max ${formData.maxDistancePerDay}km/day).`;
+      } else if (formData.tripType === 'cycling-regular') {
+        tripDescription += ` Daily cycling distance: approximately ${Math.round(totalDistance / actualNumberOfDays)}km per day.`;
+      }
+
       // Make sure POIs have the correct structure for MongoDB
-const formattedPOIs = pointsOfInterest.map(poi => {
-  // Ensure each POI has the proper format
-  return {
-    id: poi.id || `poi_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-    name: poi.name || 'Unnamed Location',
-    type: poi.type || 'Unknown',
-    location: Array.isArray(poi.location) && poi.location.length === 2 ? 
-      poi.location : [0, 0],
-    description: typeof poi.description === 'string' ? poi.description : '',
-    isDestination: !!poi.isDestination
-  };
-});
+      const formattedPOIs = pointsOfInterest.map(poi => {
+        // Ensure each POI has the proper format
+        return {
+          id: poi.id || `poi_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+          name: poi.name || 'Unnamed Location',
+          type: poi.type || 'Unknown',
+          location: Array.isArray(poi.location) && poi.location.length === 2 ? 
+            poi.location : [0, 0],
+          description: typeof poi.description === 'string' ? poi.description : '',
+          isDestination: !!poi.isDestination
+        };
+      });
 
       // Prepare trip data with FULL POI objects
       const tripData = {
         name: tripName,
-        description: `A ${formData.tripType.replace(/-/g, ' ')} trip ${formData.isCircular ? 'around' : 'from'} ${formData.startLocation}${!formData.isCircular ? ` to ${formData.endLocation}` : ''} . Total distance: ${totalDistance.toFixed(1)} km.`,
+        description: tripDescription,
         type: formData.tripType,
         startLocation: {
           type: 'Point',
@@ -513,12 +590,15 @@ const formattedPOIs = pointsOfInterest.map(poi => {
         pointsOfInterest: formattedPOIs,
         totalDistance: totalDistance,
         isCircular: formData.isCircular,
-        isMultiDay: formData.isMultiDay,
+        isMultiDay: finalIsMultiDay,
         maxDistancePerDay: formData.maxDistancePerDay,
-        numberOfDays: formData.isMultiDay ? formData.numberOfDays : 1,
-        dailyDistances: dailyDistances,
+        numberOfDays: actualNumberOfDays,
+        dailyDistances: dailyDistancesResult,
+        // Include adjustment information for future reference
+        wasAdjusted: wasAdjusted,
+        originalNumberOfDays: wasAdjusted ? adjustmentNotification.originalDays : actualNumberOfDays,
         startDate: new Date(),
-        endDate: new Date(Date.now() + (formData.numberOfDays * 24 * 60 * 60 * 1000)),
+        endDate: new Date(Date.now() + (actualNumberOfDays * 24 * 60 * 60 * 1000)),
         imageUrl: imageUrl || getDefaultImageByTripType(formData.tripType)
       };
 
@@ -577,23 +657,20 @@ const extractCountryFromLocation = (location) => {
     const totalDistance = calculateTotalDistance(route);
     let actualDays = numberOfDays;
     
-    if (tripType === 'cycling-regular' && isMultiDay) {
+    // For cycling trips, ALWAYS ensure we have enough days to respect distance constraints
+    // regardless of whether it's marked as multi-day or single day
+    if (tripType === 'cycling-regular') {
       const minDaysNeeded = Math.max(1, Math.ceil(totalDistance / maxDistancePerDay));
       actualDays = Math.max(numberOfDays, minDaysNeeded);
     }
     
-    if (tripType === 'cycling-regular' && isMultiDay) {
-      // For multi-day cycling, divide the total distance by the actual number of days
-      const avgDistancePerDay = totalDistance / actualDays;
-      
-      return Array.from({ length: actualDays }, (_, i) => ({ 
-        day: i + 1, 
-        distance: Math.round(avgDistancePerDay * 10) / 10 // Round to 1 decimal place
-      }));
-    } else {
-      // Default daily distance for other trip types
-      return [{ day: 1, distance: totalDistance }];
-    }
+    // Always distribute distance across the calculated number of days
+    const avgDistancePerDay = totalDistance / actualDays;
+    
+    return Array.from({ length: actualDays }, (_, i) => ({ 
+      day: i + 1, 
+      distance: Math.round(avgDistancePerDay * 10) / 10 // Round to 1 decimal place
+    }));
   };
 
   return (
@@ -636,7 +713,7 @@ const extractCountryFromLocation = (location) => {
         {weather && (
           <WeatherForecast 
             weather={weather} 
-            numberOfDays={formData.numberOfDays}
+            numberOfDays={dailyDistancesForDisplay.length || formData.numberOfDays}
             tripType={formData.tripType}
             isMultiDay={formData.isMultiDay}
           />
@@ -645,10 +722,13 @@ const extractCountryFromLocation = (location) => {
         {/* Cycling Plan */}
         <CyclingPlan 
           route={route}
-          numberOfDays={formData.numberOfDays}
+          numberOfDays={dailyDistancesForDisplay.length || formData.numberOfDays}
           maxDistancePerDay={formData.maxDistancePerDay}
           tripType={formData.tripType}
           isMultiDay={formData.isMultiDay}
+          dailyDistances={dailyDistancesForDisplay}
+          wasAdjusted={adjustmentNotification.open || adjustmentNotification.originalDays > 0}
+          originalDays={adjustmentNotification.originalDays}
         />
         
         {/* Points of Interest */}
@@ -664,6 +744,34 @@ const extractCountryFromLocation = (location) => {
             <CircularProgress />
           </Box>
         )}
+
+        {/* Notification for trip adjustments */}
+        <Snackbar
+          open={adjustmentNotification.open}
+          autoHideDuration={8000}
+          onClose={() => setAdjustmentNotification(prev => ({ ...prev, open: false }))}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert 
+            onClose={() => setAdjustmentNotification(prev => ({ ...prev, open: false }))} 
+            severity="warning" 
+            variant="filled"
+            sx={{ minWidth: '400px' }}
+          >
+            <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
+              🚴‍♂️ Trip Duration Automatically Adjusted
+            </Typography>
+            <Typography variant="body2">
+              Your {adjustmentNotification.totalDistance}km cycling trip was planned for {adjustmentNotification.originalDays} day{adjustmentNotification.originalDays > 1 ? 's' : ''}, 
+              but requires {adjustmentNotification.adjustedDays} days to stay within the {formData.maxDistancePerDay}km/day safety limit.
+            </Typography>
+            {adjustmentNotification.originalWasSingleDay && (
+              <Typography variant="body2" sx={{ mt: 0.5, fontStyle: 'italic' }}>
+                Your trip has been changed from "Single day" to "Multi-day" for safety.
+              </Typography>
+            )}
+          </Alert>
+        </Snackbar>
       </Box>
     </Container>
   );

@@ -131,6 +131,12 @@ The application will be available at `http://localhost:3000`
 - CORS configuration
 - Environment variable management
 
+## Known Issues
+- Unsplash API rate limits may trigger a fallback image under heavy usage. 
+- Weather forecasts are fetched live; failures may occur if OpenWeather is unavailable. 
+- Very large routes (>100 waypoints) can impact map rendering performance.
+- POI data formatting can be inconsistent when loading saved trips; ensure strict schema validation.
+
 ## Contributing
 
 1. Fork the repository

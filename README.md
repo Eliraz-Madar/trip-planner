@@ -137,10 +137,3 @@ The application will be available at `http://localhost:3000`
 - Very large routes (>100 waypoints) can impact map rendering performance.
 - POI data formatting can be inconsistent when loading saved trips; ensure strict schema validation.
 
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request 
